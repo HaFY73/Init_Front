@@ -50,6 +50,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "15.3.3",
+    "tailwindcss-animate": "^1.0.7",
     "typescript": "^5"
   }
 }

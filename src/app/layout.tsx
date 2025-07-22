@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import './globals.css';
+import { ProfileDialogProvider } from "@/contexts/ProfileDialogContext"
 
 // 🔥 동적 임포트로 클라이언트 전용 컴포넌트들 로드
 const GlobalSidebar = dynamic(() => import('@/components/GlobalSidebar'), {
@@ -81,12 +82,14 @@ export default function RootLayout({
                 <meta name="generator" content="v0.dev" />
             </head>
             <body>
+            <ProfileDialogProvider>
             <div className="app-layout">
                 <main className="main-content-full">
                     {children}
                 </main>
                 <ScrollToTop />
             </div>
+            </ProfileDialogProvider>
             </body>
             </html>
         )
@@ -101,9 +104,11 @@ export default function RootLayout({
             <meta name="generator" content="v0.dev" />
         </head>
         <body>
-        <AuthenticatedLayout pathname={pathname}>
-            {children}
-        </AuthenticatedLayout>
+        <ProfileDialogProvider> {/* 여기로 감싸기 */}
+            <AuthenticatedLayout pathname={pathname}>
+                {children}
+            </AuthenticatedLayout>
+        </ProfileDialogProvider>
         </body>
         </html>
     );

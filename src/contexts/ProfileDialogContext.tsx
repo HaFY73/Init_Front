@@ -1,5 +1,6 @@
 "use client"
 import { createContext, useContext, useState } from "react"
+import ProfileDialog from "../components/profile"
 
 const ProfileDialogContext = createContext<{
   isOpen: boolean
@@ -11,6 +12,7 @@ export function ProfileDialogProvider({ children }: { children: React.ReactNode 
   return (
     <ProfileDialogContext.Provider value={{ isOpen, setIsOpen }}>
       {children}
+      <ProfileDialog />
     </ProfileDialogContext.Provider>
   )
 }

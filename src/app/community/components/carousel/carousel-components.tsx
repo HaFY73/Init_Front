@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react"
 import { ChevronLeft, ChevronRight, Share2, Bookmark, Heart, MessageCircle, UserPlus, UserCheck } from "lucide-react"
 import type { Post as FeedPagePostType, Category as FeedPageCategoryType } from "@/app/community/feed/page"
+import Image from "next/image"
 
 const MAX_VISIBILITY = 3
 
@@ -66,7 +67,7 @@ export const AdaptedPostCard = ({
           onClick={handleFollowClick}
           className={`ml-auto p-1.5 rounded-full text-xs flex items-center transition-colors ${
             post.author.isFollowing
-              ? "bg-blue-500 text-white hover:bg-blue-600"
+              ? "bg-violet-500 text-white hover:bg-violet-600"
               : "bg-gray-200 text-gray-700 hover:bg-gray-300"
           }`}
           title={post.author.isFollowing ? "팔로잉" : "팔로우"}
@@ -78,8 +79,30 @@ export const AdaptedPostCard = ({
       <div className="post-category-container">
         <div className="post-category-badge">{displayCategoryLabel}</div>
       </div>
-      <h2 className="post-title">{post.title || "제목 없음"}</h2>
+      {post.imageUrl?.trim() && post.imageUrl.trim() !== "/placeholder.svg" && (
+          <div className="relative w-full h-[200px] bg-gray-100 rounded-md">
+            <Image
+                src={post.imageUrl.trim()}
+                alt={"Post image"}
+                fill
+                style={{ objectFit: "contain" }}
+                className="rounded-md"
+            />
+          </div>
+      )}
       <p className="post-content">{post.content}</p>
+      {post.hashtags && post.hashtags.length > 0 && (
+          <div className="post-hashtags flex flex-wrap gap-2 mt-2">
+            {post.hashtags.map((tag, idx) => (
+                <span
+                    key={idx}
+                    className="text-xs bg-violet-100 text-violet-700 px-2 py-1 rounded-full"
+                >
+        {tag}
+      </span>
+            ))}
+          </div>
+      )}
       <div className="post-stats">
         <div className="flex items-center gap-3">
           <button
@@ -100,7 +123,7 @@ export const AdaptedPostCard = ({
           </button>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          {/*<button
             className="p-1 text-gray-500 hover:text-green-500 transition-colors"
             title="공유하기"
             onClick={(e) => {
@@ -109,7 +132,7 @@ export const AdaptedPostCard = ({
             }}
           >
             <Share2 size={16} />
-          </button>
+          </button>*/}
           <button
             className="p-1 text-gray-500 hover:text-orange-500 transition-colors"
             title="저장하기"

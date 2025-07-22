@@ -129,7 +129,7 @@
   display: -webkit-box;
   -webkit-line-clamp: 6; /* Adjusted line clamp for more content */
   -webkit-box-orient: vertical;
-  font-size: 0.8rem; /* Adjusted font size */
+  font-size: 1rem; /* Adjusted font size */
   flex: 1;
   transition: all 0.3s ease-out;
   opacity: var(--active);
@@ -292,7 +292,7 @@
 }
 
 .filter-button.active {
-  color: #356ae4;
+  color: #6366f1;
   text-shadow: none;
 }
 

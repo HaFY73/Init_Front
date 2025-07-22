@@ -7,7 +7,16 @@ import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation";
 import Image from "next/image"
 import { UpwardMenu } from "../components/upward-menu";
-import { getPosts, getFollowingPosts, getPostsByCategory, searchPosts, toggleLike, addComment  } from "@/lib/post-api"
+import {
+  getPosts,
+  getFollowingPosts,
+  getPostsByCategory,
+  searchPosts,
+  toggleLike,
+  addComment,
+  toggleFollow,
+  checkFollowStatus
+} from "@/lib/post-api"
 import { getCurrentUserId } from "@/utils/auth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -25,7 +34,7 @@ import {
 import {
   Search, Users, Globe, Briefcase, Palette, Code, TrendingUp, Phone,
   Coffee, Lightbulb, GraduationCap, Target, Heart, MessageCircle,
-  Share2, Bookmark, Rss, FilterX, BookOpen, ClipboardList, Package,
+  Bookmark, Rss, FilterX, BookOpen, ClipboardList, Package,
   Building, Star, Brain, UserPlus, UserCheck, Send, type LucideIcon
 } from "lucide-react"
 import { Carousel, AdaptedPostCard } from "../components/carousel/carousel-components"
@@ -50,10 +59,10 @@ export interface Comment {
 
 export interface Post {
   id: number
-  author: { name: string; avatar: string; title: string; isFollowing?: boolean }
+  author: { id: number; name: string; avatar: string; title: string; isFollowing?: boolean }
   title: string
   content: string
-  image?: string
+  imageUrl?: string
   hashtags: string[]
   likes: number
   comments: number
@@ -88,7 +97,7 @@ const topicCategoriesList: Category[] = [
 const allCategories = [...jobCategoriesList, ...topicCategoriesList]
 
 export default function FeedPage() {
-  const [currentPostIndex, setCurrentPostIndex] = useState(0)
+  const [currentPostIndex] = useState(0)
   const [searchQuery, setSearchQuery] = useState("")
   const [posts, setPosts] = useState<Post[]>([])
   const [detailedPost, setDetailedPost] = useState<Post | null>(null)
@@ -103,30 +112,145 @@ export default function FeedPage() {
   const router = useRouter()
 
   useEffect(() => {
-    let fetchData = getPosts;
+    let isMounted = true; // 컴포넌트 마운트 상태 확인
 
-    if (feedMode === "following") {
-      fetchData = () => getFollowingPosts(1);
-    } else if (selectedCategoryKey) {
-      fetchData = () => getPostsByCategory(selectedCategoryKey);
-    } else if (searchQuery) {
-      fetchData = () => searchPosts(searchQuery);
-    }
+    const fetchData = async () => {
+      let fetchFunction = getPosts;
 
-    fetchData()
-        .then(res => {
+      if (feedMode === "following") {
+        fetchFunction = () => getFollowingPosts(userId || 1);
+      } else if (selectedCategoryKey) {
+        fetchFunction = () => getPostsByCategory(selectedCategoryKey);
+      } else if (searchQuery) {
+        fetchFunction = () => searchPosts(searchQuery);
+      }
+
+      try {
+        const res = await fetchFunction();
+
+        if (isMounted) { // 컴포넌트가 여전히 마운트되어 있는지 확인
           setPosts(res.data);
           setLoading(false);
-        })
-        .catch(err => {
-          console.error("게시글 로딩 오류:", err)
-          setLoading(false);
-        });
-  }, [feedMode, selectedCategoryKey, searchQuery]);
 
+          // 팔로우 상태 초기화 (조건부 실행)
+          if (userId && res.data.length > 0) {
+            await initializeFollowStates(res.data);
+          }
+        }
+      } catch (err) {
+        console.error("게시글 로딩 오류:", err);
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchData();
+
+    // 클린업 함수
+    return () => {
+      isMounted = false;
+    };
+  }, [feedMode, selectedCategoryKey, searchQuery, userId]);
+
+  // 🔥 새로 추가: 팔로우 상태 초기화 함수 (post-api.ts 함수 사용)
+  const initializeFollowStates = async (postList: Post[]) => {
+    if (!userId || postList.length === 0) return;
+
+    console.log('🔄 팔로우 상태 초기화 시작...');
+
+    try {
+      // 1. 고유한 작성자 ID 목록 추출 (중복 제거)
+      const uniqueAuthorIds = Array.from(
+          new Set(
+              postList
+                  .map(post => post.author.id)
+                  .filter(authorId => authorId !== userId) // 자기 자신 제외
+          )
+      );
+
+      console.log(`📊 확인할 작성자 수: ${uniqueAuthorIds.length}명`);
+
+      if (uniqueAuthorIds.length === 0) {
+        console.log('✅ 확인할 팔로우 상태가 없습니다.');
+        return;
+      }
+
+      // 2. 팔로우 상태를 저장할 맵 생성
+      const followStatusMap = new Map<number, boolean>();
+
+      // 3. 각 작성자의 팔로우 상태를 순차적으로 확인 (과부하 방지)
+      for (const authorId of uniqueAuthorIds) {
+        try {
+          console.log(`🔍 팔로우 상태 확인: 작성자 ID ${authorId}`);
+
+          // post-api.ts의 checkFollowStatus 함수 사용
+          const response = await checkFollowStatus(userId, authorId);
+          
+          const isFollowing = response.data?.isFollowing || false;
+          followStatusMap.set(authorId, isFollowing);
+          console.log(`✅ 작성자 ID ${authorId}: ${isFollowing ? '팔로잉' : '팔로우 안함'}`);
+
+          // 4. 요청 간격 조절 (서버 과부하 방지)
+          if (uniqueAuthorIds.length > 5) {
+            await new Promise(resolve => setTimeout(resolve, 100)); // 100ms 대기
+          }
+
+        } catch (error) {
+          console.warn(`❌ 작성자 ID ${authorId} 상태 확인 오류:`, error);
+          followStatusMap.set(authorId, false); // 오류 시 기본값
+        }
+      }
+
+      // 5. 게시글 목록 업데이트 (한 번에 처리)
+      const updatedPosts = postList.map(post => {
+        if (post.author.id === userId) {
+          // 자기 자신은 팔로우 버튼 숨김
+          return { ...post, author: { ...post.author, isFollowing: false } };
+        }
+
+        const isFollowing = followStatusMap.get(post.author.id) || false;
+        return { ...post, author: { ...post.author, isFollowing } };
+      });
+
+      // 6. 상태 업데이트
+      setPosts(updatedPosts);
+      console.log('✅ 팔로우 상태 초기화 완료');
+
+    } catch (error) {
+      console.error('❌ 팔로우 상태 초기화 실패:', error);
+    }
+  };
+
+  // 🔥 페이지 포커스 시 팔로우 상태 새로고침 (선택사항)
   useEffect(() => {
-    if (posts.length > 0) setCurrentPostIndex(Math.floor(posts.length / 2))
-  }, [posts])
+    let focusTimeout: NodeJS.Timeout;
+
+    const handlePageFocus = () => {
+      // 디바운싱: 연속된 포커스 이벤트 방지
+      clearTimeout(focusTimeout);
+      focusTimeout = setTimeout(() => {
+        if (userId && posts.length > 0) {
+          console.log('🔄 페이지 포커스 - 팔로우 상태 새로고침');
+          initializeFollowStates(posts);
+        }
+      }, 1000); // 1초 후 실행
+    };
+
+    // 페이지 가시성 변경 이벤트만 사용 (윈도우 포커스는 제거)
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        handlePageFocus();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearTimeout(focusTimeout);
+    };
+  }, [userId, posts.length]);
 
   const handleCategoryClick = (key: string) => {
     setSelectedCategoryKey(key === selectedCategoryKey ? null : key)
@@ -149,20 +273,118 @@ export default function FeedPage() {
     }
   }
 
-  const handleFollowToggle = (authorName: string) => {
-    const newPosts = posts.map(p =>
-        p.author.name === authorName ? { ...p, author: { ...p.author, isFollowing: !p.author.isFollowing } } : p
-    )
-    setPosts(newPosts)
+  // 피드 페이지의 handleFollowToggle 함수 - CommunityProfile 기반으로 완전 수정
+// 🔥 수정된 handleFollowToggle 함수 (post-api.ts의 toggleFollow 사용)
+  const handleFollowToggle = async (authorName: string, targetUserId: number) => {
+    console.log('🎯 팔로우 토글 시도:', { authorName, targetUserId, currentUserId: userId });
 
-    if (detailedPost && detailedPost.author.name === authorName) {
-      setDetailedPost(prev =>
-          prev ? { ...prev, author: { ...prev.author, isFollowing: !prev.author.isFollowing } } : null
-      )
+    if (!userId || !targetUserId) {
+      console.error('❌ 사용자 ID가 없습니다.');
+      alert('로그인이 필요합니다.');
+      return;
     }
 
-    fetch(`http://localhost:8081/api/follows?followerId=${1}&followingId=${2}`, { method: "POST" })
-  }
+    if (userId === targetUserId) {
+      console.error('❌ 자기 자신을 팔로우할 수 없습니다.');
+      return;
+    }
+
+    // 현재 팔로우 상태 확인
+    const currentPost = posts.find(p => p.author.id === targetUserId);
+    const isCurrentlyFollowing = currentPost?.author.isFollowing || false;
+
+    console.log('📊 현재 팔로우 상태:', isCurrentlyFollowing);
+
+    // UI 즉시 업데이트 (낙관적 업데이트)
+    const optimisticNewState = !isCurrentlyFollowing;
+
+    const updatedPosts = posts.map(p =>
+        p.author.id === targetUserId
+            ? { ...p, author: { ...p.author, isFollowing: optimisticNewState } }
+            : p
+    );
+    setPosts(updatedPosts);
+
+    // 상세보기 모달도 업데이트
+    if (detailedPost && detailedPost.author.id === targetUserId) {
+      setDetailedPost(prev =>
+          prev ? { ...prev, author: { ...prev.author, isFollowing: optimisticNewState } } : null
+      );
+    }
+
+    try {
+      console.log('🚀 API 호출 시작...');
+
+      // post-api.ts의 toggleFollow 함수 사용
+      const response = await toggleFollow(userId, targetUserId);
+      
+      console.log('✅ 팔로우 토글 응답:', response.data);
+
+      if (response.data.success) {
+        const serverFollowingState = response.data.following;
+        console.log('🎯 서버에서 확인된 팔로우 상태:', serverFollowingState);
+
+        // 서버 응답에 따라 최종 상태 확정
+        const finalUpdatedPosts = posts.map(p =>
+            p.author.id === targetUserId
+                ? { ...p, author: { ...p.author, isFollowing: serverFollowingState } }
+                : p
+        );
+        setPosts(finalUpdatedPosts);
+
+        // 상세보기 모달도 최종 업데이트
+        if (detailedPost && detailedPost.author.id === targetUserId) {
+          setDetailedPost(prev =>
+              prev ? { ...prev, author: { ...prev.author, isFollowing: serverFollowingState } } : null
+          );
+        }
+
+        const actionText = serverFollowingState ? '팔로우' : '언팔로우';
+        console.log(`🎉 ${actionText} 성공!`);
+
+      } else {
+        console.error('❌ 팔로우 처리 실패:', response.data.message);
+        alert('팔로우 처리에 실패했습니다.');
+        
+        // 실패 시 원래 상태로 되돌리기
+        const revertedPosts = posts.map(p =>
+            p.author.id === targetUserId
+                ? { ...p, author: { ...p.author, isFollowing: isCurrentlyFollowing } }
+                : p
+        );
+        setPosts(revertedPosts);
+      }
+    } catch (error) {
+      console.error('❌ 팔로우 토글 중 오류:', error);
+      
+      // 상세한 에러 정보 표시
+      let errorMessage = '팔로우 처리 중 오류가 발생했습니다.';
+      if (error instanceof Error) {
+        if (error.message.includes('500')) {
+          errorMessage = '서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+        } else if (error.message.includes('Network Error')) {
+          errorMessage = '네트워크 연결을 확인해주세요.';
+        }
+      }
+      
+      alert(errorMessage);
+
+      // 오류 시 원래 상태로 되돌리기
+      const revertedPosts = posts.map(p =>
+          p.author.id === targetUserId
+              ? { ...p, author: { ...p.author, isFollowing: isCurrentlyFollowing } }
+              : p
+      );
+      setPosts(revertedPosts);
+
+      // 상세보기 모달도 되돌리기
+      if (detailedPost && detailedPost.author.id === targetUserId) {
+        setDetailedPost(prev =>
+            prev ? { ...prev, author: { ...prev.author, isFollowing: isCurrentlyFollowing } } : null
+        );
+      }
+    }
+  };
 
   const handleCommentSubmit = () => {
     if (!newComment.trim() || !detailedPost || typeof userId !== "number") return;
@@ -194,9 +416,9 @@ export default function FeedPage() {
 
   return (
       <SideLayout>
-        <div className="flex flex-1 flex-col min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+        <div className="flex flex-1 flex-col min-h-screen bg-gradient-to-br from-violet-50 to-indigo-100 pl-6">
           <div className="flex-1 overflow-y-auto relative" ref={contentRef}>
-            <div className="max-w-6xl mx-auto px-4 py-8">
+            <div className="w-full max-w-[1200px] mx-auto px-12 md:px-6 lg:px-8 py-8">
               {/* 필터 헤더 */}
               <div className="mb-6 pt-8">
                 <h1 className="text-2xl font-bold text-gray-900 mb-1 flex items-center">
@@ -245,7 +467,7 @@ export default function FeedPage() {
                       placeholder="검색..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-10 pr-4 py-2.5 w-full border-gray-300 focus:border-[#356ae4] focus:ring-[#356ae4] rounded-full text-sm"
+                      className="pl-10 pr-4 py-2.5 w-full border-gray-300 focus:border-[#6366f1] focus:ring-[#8b5cf6] rounded-full text-sm"
                   />
                 </div>
               </div>
@@ -281,7 +503,7 @@ export default function FeedPage() {
                           allCategories={allCategories}
                           onCardClick={handleOpenPostDetail}
                           onLike={handleLikeToggle}
-                          onFollowToggle={handleFollowToggle}
+                          onFollowToggle={() => handleFollowToggle(post.author.name, post.author.id)}
                           isActive={false}
                       />
                   ))}
@@ -303,9 +525,10 @@ export default function FeedPage() {
         {detailedPost && (
           <div className="fixed inset-0 z-50 flex items-center justify-center">
             <Dialog open={!!detailedPost} onOpenChange={() => setDetailedPost(null)}>
-              <DialogContent className="sm:max-w-3xl w-full h-[85vh] max-h-[900px] flex flex-col overflow-hidden p-0">
+              <DialogContent
+                  className="w-full max-w-3xl sm:p-6 p-4 h-[85vh] max-h-[900px] flex flex-col overflow-hidden mx-auto md:ml-[10rem]">
                 <DialogHeader className="p-6 pb-3 border-b border-gray-100 flex-shrink-0">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between w-full">
                     <div className="flex items-center gap-3">
                       <Avatar className="h-10 w-10">
                         <AvatarImage src={detailedPost.author.avatar || "/placeholder.svg"} />
@@ -321,8 +544,8 @@ export default function FeedPage() {
                     <Button
                         variant={detailedPost.author.isFollowing ? "default" : "outline"}
                         size="sm"
-                        onClick={() => handleFollowToggle(detailedPost.author.name)}
-                        className={`${detailedPost.author.isFollowing ? "bg-blue-500 hover:bg-blue-600 text-white" : "border-blue-500 text-blue-500 hover:bg-blue-50"}`}
+                        onClick={() => handleFollowToggle(detailedPost.author.name, detailedPost.author.id)}
+                        className={`${detailedPost.author.isFollowing ? "bg-violet-500 hover:bg-violet-600 text-white" : "border-violet-500 text-violet-500 hover:bg-violet-50"}`}
                     >
                       {detailedPost.author.isFollowing ? (
                           <UserCheck className="h-4 w-4 mr-1.5" />
@@ -331,8 +554,8 @@ export default function FeedPage() {
                       )}
                       {detailedPost.author.isFollowing ? "팔로잉" : "팔로우"}
                     </Button>
+
                   </div>
-                  <h2 className="text-xl font-bold mt-2">{detailedPost.title}</h2>
                 </DialogHeader>
 
                 <Tabs defaultValue="post" className="flex-1 flex flex-col overflow-hidden">
@@ -349,15 +572,19 @@ export default function FeedPage() {
                   <TabsContent value="post" className="flex-1 px-6 py-4 overflow-auto bg-white"
                                style={{ minHeight: '500px', maxHeight: 'calc(85vh - 150px)' }}>
                     <div className="space-y-4 pr-2">
-                      {detailedPost.image && (
+                      {detailedPost.imageUrl && (
                           <div className="relative w-full h-[300px] bg-gray-100 rounded-md">
-                            <Image
-                                src={detailedPost.image}
-                                alt={detailedPost.title || "Post image"}
-                                layout="fill"
-                                objectFit="contain"
-                                className="rounded-md"
-                            />
+                            {detailedPost.imageUrl?.trim() ? (
+                                <div className="relative w-full h-[300px] bg-gray-100 rounded-md">
+                                  <Image
+                                      src={detailedPost.imageUrl.trim()}
+                                      alt={"Post image"}
+                                      fill
+                                      style={{ objectFit: "contain" }}
+                                      className="rounded-md"
+                                  />
+                                </div>
+                            ) : null}
                           </div>
                       )}
                       <p className="text-gray-700 whitespace-pre-line leading-relaxed text-base">
@@ -368,7 +595,7 @@ export default function FeedPage() {
                             <Badge
                                 key={index}
                                 variant="secondary"
-                                className="text-xs bg-blue-100 text-blue-700 hover:bg-blue-200"
+                                className="text-xs bg-violet-100 text-violet-700 hover:bg-violet-200"
                             >
                               {tag}
                             </Badge>
@@ -418,7 +645,7 @@ export default function FeedPage() {
                                   <Button
                                       variant="ghost"
                                       size="sm"
-                                      className="text-blue-600 hover:bg-blue-50"
+                                      className="text-violet-600 hover:bg-violet-50"
                                       onClick={() => setVisibleComments((prev) => prev + 5)}
                                   >
                                     댓글 더 보기 ({detailedPost.commentsList!.length - visibleComments}개 남음)
@@ -448,7 +675,7 @@ export default function FeedPage() {
                               placeholder="댓글을 작성하세요"
                               value={newComment}
                               onChange={(e) => setNewComment(e.target.value)}
-                              className="flex-1 resize-none border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-md text-sm min-h-[40px] max-h-[120px]"
+                              className="flex-1 resize-none border-gray-300 focus:border-violet-500 focus:ring-violet-500 rounded-md text-sm min-h-[40px] max-h-[120px]"
                               rows={2}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -459,7 +686,7 @@ export default function FeedPage() {
                           />
                           <Button
                               size="icon"
-                              className="rounded-full p-2 bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50"
+                              className="rounded-full p-2 bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50"
                               onClick={handleCommentSubmit}
                               disabled={!newComment.trim()}
                           >
@@ -487,14 +714,14 @@ export default function FeedPage() {
                         />
                         {detailedPost.likes}
                       </Button>
-                      <Button variant="ghost" size="sm" className="text-gray-600 hover:text-blue-500">
+                      <Button variant="ghost" size="sm" className="text-gray-600 hover:text-violet-500">
                         <MessageCircle className="h-4 w-4 mr-1" />
                         {detailedPost.comments}
                       </Button>
-                      <Button variant="ghost" size="sm" className="text-gray-600 hover:text-green-500">
+                      {/*<Button variant="ghost" size="sm" className="text-gray-600 hover:text-green-500">
                         <Share2 className="h-4 w-4 mr-1" />
                         공유
-                      </Button>
+                      </Button>*/}
                       <Button variant="ghost" size="sm" className="text-gray-600 hover:text-orange-500">
                         <Bookmark className="h-4 w-4 mr-1" />
                         저장

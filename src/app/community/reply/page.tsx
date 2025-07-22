@@ -232,7 +232,7 @@ export default function ReplyPage() {
 
   return (
     <SideLayout>
-      <div className="flex-1 min-h-screen bg-orange-50">
+      <div className="flex-1 min-h-screen bg-orange-50 pl-6">
         <div className="px-6 py-8 w-full max-w-[1200px] mx-auto">
           {/* Header */}
           <div className="mb-6 pt-8">
