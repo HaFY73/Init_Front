@@ -16,7 +16,7 @@ export const findAccountApi = {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                 },
-                credentials: 'include', // 🔥 추가
+                credentials: 'include',
                 body: `email=${encodeURIComponent(email)}`,
             });
 
@@ -31,15 +31,21 @@ export const findAccountApi = {
             const result = await response.text();
             console.log('✅ 아이디 찾기 성공:', result);
             return result;
-        } catch (error) {
+        } catch (error: any) {
             console.error('❌ 아이디 찾기 실패:', error);
 
-            // 네트워크 오류인지 확인
-            if (error instanceof TypeError && error.message.includes('fetch')) {
-                throw new Error('서버에 연결할 수 없습니다. 네트워크 연결을 확인해주세요.');
+            // 네트워크 오류 또는 fetch 오류인지 확인
+            if (error instanceof TypeError || 
+                error?.name === 'TypeError' ||
+                error?.message?.includes('fetch') ||
+                error?.message?.includes('Failed to fetch') ||
+                error?.message?.includes('NetworkError') ||
+                error?.message?.includes('ECONNREFUSED')) {
+                throw new Error('서버에 연결할 수 없습니다. 백엔드 서버가 실행중인지 확인해주세요.');
             }
 
-            throw error;
+            // 기타 오류는 원본 메시지 또는 기본 메시지 사용
+            throw new Error(error?.message || '아이디 찾기 중 오류가 발생했습니다.');
         }
     },
 

@@ -3089,6 +3089,11 @@ raf@^3.4.1:
   dependencies:
     performance-now "^2.1.0"
 
+react-colorful@^5.6.1:
+  version "5.6.1"
+  resolved "https://registry.npmjs.org/react-colorful/-/react-colorful-5.6.1.tgz"
+  integrity sha512-1exovf0uGTGyq5mXQT0zgQ80uvj2PCwvF8zY1RN9/vbJVSjSo3fsB/4L3ObbF7u70NduSiK4xu4Y6q1MHoUGEw==
+
 react-day-picker@^9.7.0:
   version "9.7.0"
   resolved "https://registry.npmjs.org/react-day-picker/-/react-day-picker-9.7.0.tgz"

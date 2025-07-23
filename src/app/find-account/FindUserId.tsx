@@ -55,15 +55,19 @@ export default function FindUserId() {
                     message: errorMessage || "아이디를 찾을 수 없습니다."
                 })
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error("❌ 아이디 찾기 오류:", error)
 
             // 더 구체적인 오류 메시지 제공
             let errorMessage = "네트워크 오류가 발생했습니다."
 
-            if (error instanceof TypeError && error.message.includes('fetch')) {
+            if (error instanceof TypeError || 
+                error?.name === 'TypeError' ||
+                error?.message?.includes('fetch') ||
+                error?.message?.includes('Failed to fetch') ||
+                error?.message?.includes('NetworkError')) {
                 errorMessage = "서버에 연결할 수 없습니다. 백엔드 서버가 실행중인지 확인해주세요."
-            } else if (error instanceof Error) {
+            } else if (error?.message) {
                 errorMessage = error.message
             }
 

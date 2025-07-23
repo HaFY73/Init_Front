@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Heart, MessageCircle, Share2, Bookmark, Search, Users, UserMinus } from "lucide-react"
+import { Search, Users, UserMinus } from "lucide-react"
 import {
   getFollowingList,
   toggleFollow
@@ -18,7 +18,7 @@ import { getCurrentUserId } from "@/utils/auth"
 // 사용자 타입 정의
 interface User {
   id: number
-  userId?: string
+  userId: number
   name: string
   profileImage?: string
   title: string
@@ -36,59 +36,60 @@ export default function FollowPage() {
   const router = useRouter()
   const currentUserId = getCurrentUserId()
 
-  useEffect(() => {
-    const fetchFollowingUsers = async () => {
-      if (!currentUserId) {
-        console.error('사용자 ID가 없습니다.');
-        setLoading(false);
-        return;
-      }
+  // 팔로잉 목록을 가져오는 함수
+  const fetchFollowingUsers = async () => {
+    if (!currentUserId) {
+      console.error('사용자 ID가 없습니다.');
+      setLoading(false);
+      return;
+    }
 
-      try {
-        console.log('팔로잉 목록 조회 시도:', currentUserId);
+    try {
+      console.log('팔로잉 목록 조회 시도:', currentUserId);
 
-        // post-api.ts의 getFollowingList 함수 사용
-        const response = await getFollowingList(currentUserId);
-        const followData = response.data;
+      // post-api.ts의 getFollowingList 함수 사용
+      const response = await getFollowingList(currentUserId);
+      const followData = response.data;
 
-        console.log('팔로우 데이터:', followData);
+      console.log('팔로우 데이터:', followData);
 
-        if (Array.isArray(followData) && followData.length > 0) {
-          // 🔥 수정된 데이터 변환 로직
-          const users: User[] = followData.map((follow: any) => {
-            console.log('개별 팔로우 데이터:', follow);
-            const followingUser = follow.following;
+      if (Array.isArray(followData) && followData.length > 0) {
+        // 🔥 수정된 데이터 변환 로직
+        const users: User[] = followData.map((follow: any) => {
+          console.log('개별 팔로우 데이터:', follow);
+          const followingUser = follow.following;
 
-            return {
-              id: followingUser.id,
-              userId: followingUser.userId || `user${followingUser.id}`,
-              name: followingUser.name,
-              profileImage: followingUser.profileImage,
+          return {
+            id: followingUser.id,
+            userId: followingUser.userId || followingUser.id,
+            name: followingUser.displayName || followingUser.name,
+            profileImage: followingUser.profileImageUrl || followingUser.profileImage,
 
-              // 🔥 실제 서버 데이터 사용 (랜덤 값 제거!)
-              title: followingUser.title || "직책 없음",
-              followersCount: followingUser.followersCount || 0,
-              followingCount: followingUser.followingCount || 0,
-              postsCount: followingUser.postsCount || 0,
+            // 🔥 실제 서버 데이터 사용 (랜덤 값 제거!)
+            title: followingUser.jobTitle || followingUser.title || "직책 없음",
+            followersCount: followingUser.followersCount || 0,
+            followingCount: followingUser.followingCount || 0,
+            postsCount: followingUser.postsCount || 0,
 
-              isFollowing: true
-            };
-          });
+            isFollowing: true
+          };
+        });
 
-          setFollowingUsers(users);
-          console.log('변환된 사용자 목록:', users);
-        } else {
-          console.log('팔로우 데이터가 비어있습니다.');
-          setFollowingUsers([]);
-        }
-      } catch (error) {
-        console.error('팔로잉 목록 조회 중 오류:', error);
+        setFollowingUsers(users);
+        console.log('변환된 사용자 목록:', users);
+      } else {
+        console.log('팔로우 데이터가 비어있습니다.');
         setFollowingUsers([]);
-      } finally {
-        setLoading(false);
       }
-    };
+    } catch (error) {
+      console.error('팔로잉 목록 조회 중 오류:', error);
+      setFollowingUsers([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
+  useEffect(() => {
     fetchFollowingUsers();
   }, [currentUserId]);
 
@@ -97,8 +98,7 @@ export default function FollowPage() {
     const handleFocus = () => {
       if (currentUserId && !loading) {
         console.log('페이지 포커스, 팔로우 목록 새로고침');
-        // 여기서 다시 fetchFollowingUsers 호출
-        window.location.reload(); // 임시 방법
+        fetchFollowingUsers();
       }
     };
 
@@ -110,45 +110,50 @@ export default function FollowPage() {
   const filteredUsers = followingUsers.filter(
       (user) =>
           user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          (user.userId && user.userId.toLowerCase().includes(searchQuery.toLowerCase()))
+          user.userId.toString().includes(searchQuery.toLowerCase())  // 🔥 수정: toString() 추가
   )
 
   // 언팔로우 처리
-  const handleUnfollow = async (targetUserId: number) => {
-    if (!currentUserId) return;
+  const handleUnfollow = async (targetUser: User) => {  // 🔥 User 객체 전체를 받음
+    if (!currentUserId) {
+      alert('로그인이 필요합니다.');
+      return;
+    }
+
+    // 🔥 실제 User ID 사용 (Profile ID가 아닌)
+    const actualUserId = targetUser.userId;
+    console.log('🎯 언팔로우 시도:', {
+      currentUserId,
+      profileId: targetUser.id,      // Profile ID
+      actualUserId: actualUserId,    // User ID (실제 사용)
+      targetUserName: targetUser.name
+    });
 
     try {
-      // 🔥 올바른 API 엔드포인트 사용
-      const response = await fetch(`http://localhost:8080/api/follows/toggle?followerId=${currentUserId}&followingId=${targetUserId}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      // 🔥 User ID로 API 호출
+      const response = await toggleFollow(currentUserId, actualUserId);
 
-      if (response.ok) {
-        const result = await response.json();
-        console.log('팔로우 토글 결과:', result);
+      console.log('✅ 언팔로우 응답:', response);
 
-        // 🔥 서버 응답 확인 후 UI 업데이트
-        if (result.success && !result.following) {
-          // 언팔로우 성공 시 목록에서 제거
+      if (response.success && response.data && response.data.success) {
+        const isNowFollowing = response.data.following;
+
+        if (!isNowFollowing) {
+          // 언팔로우 성공 시 목록에서 제거 (Profile ID 기준으로 UI 업데이트)
           setFollowingUsers(prevUsers =>
-              prevUsers.filter(user => user.id !== targetUserId)
+              prevUsers.filter(user => user.id !== targetUser.id)
           );
-          console.log('언팔로우 성공');
-        } else if (result.success && result.following) {
-          console.log('다시 팔로우됨 (예상치 못한 상황)');
+          console.log('✅ 언팔로우 성공 - UI 업데이트 완료');
+        } else {
+          console.log('⚠️ 예상치 못한 상황: 언팔로우했는데 following=true');
         }
       } else {
-        const errorText = await response.text();
-        console.error('언팔로우 실패:', response.status, errorText);
-        alert('언팔로우 처리에 실패했습니다.');
+        console.error('❌ 언팔로우 실패:', response.message);
+        alert(`언팔로우 처리에 실패했습니다: ${response.message || '알 수 없는 오류'}`);
       }
     } catch (error) {
-      console.error('언팔로우 중 오류:', error);
-      alert('네트워크 오류가 발생했습니다.');
+      console.error('❌ 언팔로우 중 오류:', error);
+      alert('네트워크 오류가 발생했습니다. 다시 시도해주세요.');
     }
   };
 
@@ -201,7 +206,7 @@ export default function FollowPage() {
                             <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => handleUnfollow(user.id)}
+                                onClick={() => handleUnfollow(user)}
                                 className="border-[#6366f1] text-[#6366f1] hover:bg-[#6366f1]/10 hover:text-[#6366f1]"
                             >
                               <UserMinus className="h-4 w-4 mr-1" />

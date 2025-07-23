@@ -38,6 +38,14 @@ export function UpwardMenu({
   // 커뮤니티 프로필 정보 가져오기
   const { profile, loading } = useCommunityProfile()
 
+  // 디버깅용 로그
+  useEffect(() => {
+    if (profile) {
+      console.log("프로필 정보:", profile)
+      console.log("프로필 이미지 URL:", profile.profileImageUrl)
+    }
+  }, [profile])
+
   // 메뉴 버튼 배열
   const menuItems: MenuItem[] = [
     {
@@ -80,13 +88,31 @@ export function UpwardMenu({
   // 프로필 이미지 URL 결정
   const getProfileImageUrl = () => {
     if (loading) return "/placeholder.svg?height=32&width=32"
-    return profile?.profileImageUrl || "/placeholder.svg?height=32&width=32"
+    
+    if (profile?.profileImageUrl) {
+      // base64 데이터인 경우 그대로 사용
+      if (profile.profileImageUrl.startsWith('data:')) {
+        return profile.profileImageUrl
+      }
+      // 절대 URL인 경우 그대로 사용
+      if (profile.profileImageUrl.startsWith('http')) {
+        return profile.profileImageUrl
+      }
+      // 상대 경로인 경우 절대 URL로 변환
+      if (profile.profileImageUrl.startsWith('/')) {
+        return `http://localhost:8080${profile.profileImageUrl}`
+      }
+      // 기타 경우 그대로 사용
+      return profile.profileImageUrl
+    }
+    
+    return "/placeholder.svg?height=32&width=32"
   }
 
   // 프로필 이름 첫 글자 가져오기
   const getProfileInitial = () => {
     if (loading) return "U"
-    return profile?.displayName?.charAt(0) || profile?.nickname?.charAt(0) || "U"
+    return profile?.displayName?.charAt(0) || "U"
   }
 
   return (
@@ -114,6 +140,10 @@ export function UpwardMenu({
                         <AvatarImage
                             src={getProfileImageUrl()}
                             alt={profile?.displayName || "프로필"}
+                            onError={(e) => {
+                              console.log("이미지 로딩 실패:", getProfileImageUrl())
+                              e.currentTarget.src = "/placeholder.svg?height=32&width=32"
+                            }}
                         />
                         <AvatarFallback className="text-xs font-medium">
                           {getProfileInitial()}

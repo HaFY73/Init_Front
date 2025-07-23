@@ -1,26 +1,34 @@
+// WritePage.tsx 오류 수정사항
+
 "use client"
 
 import SideLayout from "../sidebar/SideLayout";
 import { useEffect, useRef, useState, useCallback } from "react"
 import { useRouter } from "next/navigation";
 import { getCurrentUserId } from "@/utils/auth"
-import { createPost } from "@/lib/post-api"
+// 🔥 수정 1: 필요한 API 함수들 추가 import
+import {
+  createPost,
+  updatePost,
+  deletePost,
+  getUserDraftPosts,
+  getUserPublishedPosts,
+  type CreatePostData,
+} from "@/lib/post-api"
+import { uploadImageSimple } from "@/utils/imageUpload"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover"
 import { Command, CommandGroup, CommandItem } from "@/components/ui/command"
 import {
-  PenSquare, FileText, Clock, Eye, ChevronDown, Hash, ImageIcon, X,
-  Heart, MessageCircle, Share2, Bookmark, AlertCircle,
-  Briefcase, Palette, Code, TrendingUp, Phone, BookOpen,
-  ClipboardList, Package, Building, Star, Coffee, Lightbulb,
-  GraduationCap, Target, Brain, Check, type LucideIcon
+  PenSquare, FileText, Clock, Eye, ChevronDown, Hash, ImageIcon, X, Heart, MessageCircle,
+  AlertCircle, Briefcase, Palette, Code, TrendingUp, Phone, BookOpen, ClipboardList,
+  Package, Building, Star, Coffee, Lightbulb, GraduationCap, Target, Brain, Check, type LucideIcon
 } from "lucide-react"
 import { UpwardMenu } from "../components/upward-menu"
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
@@ -53,11 +61,8 @@ interface NewPost {
   image: string | null
 }
 
-// Constants
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "/api"
-const IMAGE_UPLOAD_URL = `${API_BASE_URL}/upload/image`
-const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
-const SUPPORTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+// 🔥 수정 2: API_BASE_URL 제거 (post-api.ts에서 관리)
+// const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "/api" // 제거
 
 const allCategories: Category[] = [
   { icon: Briefcase, label: "경영/기획/전략", key: "management", color: "#3498db", type: "job" },
@@ -82,56 +87,18 @@ const useImageUpload = () => {
   const [isUploading, setIsUploading] = useState(false)
 
   const uploadImage = useCallback(async (file: File): Promise<string> => {
-    // 파일 유효성 검사
-    if (file.size > MAX_FILE_SIZE) {
-      throw new Error('이미지 크기는 5MB 이하여야 합니다.')
-    }
-
-    if (!SUPPORTED_IMAGE_TYPES.includes(file.type)) {
-      throw new Error('지원되지 않는 이미지 형식입니다.')
-    }
-
     setIsUploading(true)
 
     try {
-      // 서버에 업로드
-      const formData = new FormData()
-      formData.append('image', file)
-
       console.log('🔄 이미지 업로드 시작:', file.name)
 
-      const response = await fetch(IMAGE_UPLOAD_URL, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('authToken') || localStorage.getItem('accessToken')}`
-        },
-        body: formData
-      })
+      const result = await uploadImageSimple(file)
 
-      console.log('📡 업로드 응답:', response.status, response.statusText)
-
-      if (response.ok) {
-        const result = await response.json()
-        console.log('✅ 업로드 성공:', result)
-
-        // 서버에서 반환된 이미지 URL 처리
-        const imageUrl = result.imageUrl || result.url || result.data?.imageUrl
-
-        if (imageUrl) {
-          // 절대 경로로 변환 (필요한 경우)
-          const fullImageUrl = imageUrl.startsWith('http')
-              ? imageUrl
-              : `http://localhost:8080${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`
-
-          console.log('🖼️ 최종 이미지 URL:', fullImageUrl)
-          return fullImageUrl
-        } else {
-          throw new Error('서버에서 이미지 URL을 반환하지 않았습니다.')
-        }
+      if (result.success && result.imageUrl) {
+        console.log('✅ 이미지 업로드 성공')
+        return result.imageUrl
       } else {
-        const errorText = await response.text()
-        console.error('❌ 서버 업로드 실패:', errorText)
-        throw new Error(`서버 업로드 실패: ${response.status}`)
+        throw new Error(result.error || '이미지 업로드에 실패했습니다.')
       }
     } catch (error) {
       console.error('❌ 이미지 업로드 에러:', error)
@@ -144,55 +111,75 @@ const useImageUpload = () => {
   return { uploadImage, isUploading }
 }
 
+// 🔥 수정 3: usePosts 훅 완전 수정
 const usePosts = (userId: number | null) => {
   const [drafts, setDrafts] = useState<Post[]>([])
   const [published, setPublished] = useState<Post[]>([])
   const [isLoading, setIsLoading] = useState(false)
-
-  const getAuthHeaders = useCallback(() => ({
-    'Authorization': `Bearer ${localStorage.getItem("authToken")}`,
-    'Content-Type': 'application/json'
-  }), [])
 
   const loadDraftPosts = useCallback(async () => {
     if (!userId) return
 
     setIsLoading(true)
     try {
-      const response = await fetch(`${API_BASE_URL}/posts/user/${userId}/drafts`, {
-        headers: getAuthHeaders(),
-      })
+      console.log('🔄 임시저장 글 로딩 시작...')
+      const draftPosts = await getUserDraftPosts(userId)
 
-      if (response.ok) {
-        const data = await response.json()
-        setDrafts(data)
-      }
+      // PostResponse를 Post 타입으로 변환
+      const convertedDrafts: Post[] = draftPosts.map(post => ({
+        id: post.id,
+        content: post.content,
+        category: post.jobCategory || post.topicCategory || 'etc',
+        hashtags: post.hashtags,
+        image: post.imageUrl,
+        status: "draft" as const,
+        createdAt: post.createdAt,
+        likes: post.likesCount,
+        comments: post.commentsCount
+      }))
+
+      setDrafts(convertedDrafts)
+      console.log('✅ 임시저장 글 로딩 성공:', convertedDrafts.length, '개')
+
     } catch (error) {
-      console.error("임시저장 글 불러오기 실패:", error)
+      console.error("❌ 임시저장 글 불러오기 실패:", error)
+      setDrafts([])
     } finally {
       setIsLoading(false)
     }
-  }, [userId, getAuthHeaders])
+  }, [userId])
 
   const loadPublishedPosts = useCallback(async () => {
     if (!userId) return
 
     setIsLoading(true)
     try {
-      const response = await fetch(`${API_BASE_URL}/posts/user/${userId}/published`, {
-        headers: getAuthHeaders(),
-      })
+      console.log('🔄 발행된 글 로딩 시작...')
+      const publishedPosts = await getUserPublishedPosts(userId)
 
-      if (response.ok) {
-        const data = await response.json()
-        setPublished(data)
-      }
+      // PostResponse를 Post 타입으로 변환
+      const convertedPublished: Post[] = publishedPosts.map(post => ({
+        id: post.id,
+        content: post.content,
+        category: post.jobCategory || post.topicCategory || 'etc',
+        hashtags: post.hashtags,
+        image: post.imageUrl,
+        status: "published" as const,
+        createdAt: post.createdAt,
+        likes: post.likesCount,
+        comments: post.commentsCount
+      }))
+
+      setPublished(convertedPublished)
+      console.log('✅ 발행된 글 로딩 성공:', convertedPublished.length, '개')
+
     } catch (error) {
-      console.error("발행된 게시글 불러오기 실패:", error)
+      console.error("❌ 발행된 게시글 불러오기 실패:", error)
+      setPublished([])
     } finally {
       setIsLoading(false)
     }
-  }, [userId, getAuthHeaders])
+  }, [userId])
 
   return {
     drafts,
@@ -256,8 +243,12 @@ export default function WritePage() {
     setDisplayCategoryText("카테고리 선택")
   }, [])
 
+  // 🔥 수정 4: handleSavePost 함수 완전 수정
   const handleSavePost = useCallback(async (status: "draft" | "published") => {
-    if (!userId) return
+    if (!userId) {
+      alert("로그인이 필요합니다.")
+      return
+    }
 
     const hashtagsArr = newPost.hashtags
         .split(",")
@@ -265,19 +256,26 @@ export default function WritePage() {
         .filter(Boolean)
         .map(t => t.startsWith("#") ? t : `#${t}`)
 
-    const postData = {
-      title: newPost.content.slice(0, 20) || "제목없음",
+    const postData: CreatePostData = {
       content: newPost.content,
       category: selectedCategoryKey || "etc",
       hashtags: hashtagsArr,
       imageUrl: newPost.image || null,
-      status: status,
+      status: status.toUpperCase() as "DRAFT" | "PUBLISHED", // 🔥 대문자 변환
       author: { id: userId }
     }
 
     try {
-      await createPost(postData)
-      alert(status === "published" ? "글이 발행되었습니다!" : "글이 임시저장되었습니다!")
+      if (editingPost) {
+        // 수정 모드
+        await updatePost(editingPost.id, userId, postData)
+        alert("글이 수정되었습니다!")
+      } else {
+        // 생성 모드
+        await createPost(postData)
+        alert(status === "published" ? "글이 발행되었습니다!" : "글이 임시저장되었습니다!")
+      }
+
       resetForm()
       setActiveTab(status === "draft" ? "drafts" : "published")
 
@@ -291,7 +289,7 @@ export default function WritePage() {
       console.error("글 저장 실패:", err)
       alert("글 저장에 실패했습니다.")
     }
-  }, [userId, newPost, selectedCategoryKey, resetForm, loadDraftPosts, loadPublishedPosts])
+  }, [userId, newPost, selectedCategoryKey, resetForm, loadDraftPosts, loadPublishedPosts, editingPost])
 
   const handleEditPost = useCallback((post: Post) => {
     setEditingPost(post)
@@ -301,6 +299,15 @@ export default function WritePage() {
       hashtags: post.hashtags.join(", "),
       image: post.image || null
     })
+
+    // 카테고리 설정
+    const categoryInfo = allCategories.find(c => c.key === post.category)
+    if (categoryInfo) {
+      setSelectedCategoryKey(post.category)
+      setDisplayCategoryText(categoryInfo.label)
+      setCategoryType(categoryInfo.type)
+    }
+
     setActiveTab("write")
     setShowPreview(false)
   }, [])
@@ -321,69 +328,113 @@ export default function WritePage() {
     if (!file) return
 
     try {
-      // 임시 미리보기 먼저 표시
-      const tempUrl = URL.createObjectURL(file)
-      setNewPost(prev => ({ ...prev, image: tempUrl }))
+      // 🔥 1. 즉시 미리보기를 위한 Object URL 생성
+      const previewUrl = URL.createObjectURL(file)
 
-      // 서버에 업로드
+      // 🔥 2. 임시로 미리보기 URL 설정 (짧은 URL)
+      setNewPost(prev => ({
+        ...prev,
+        image: previewUrl // 서버 업로드 완료되면 교체될 예정
+      }))
+
+      console.log('🔄 이미지 업로드 시작:', file.name)
+
+      // 🔥 3. 서버에 실제 업로드
       const serverImageUrl = await uploadImage(file)
 
-      // 서버 URL로 교체
-      setNewPost(prev => ({ ...prev, image: serverImageUrl }))
+      // 🔥 4. 서버 업로드 성공시 실제 URL로 교체
+      setNewPost(prev => ({
+        ...prev,
+        image: serverImageUrl // 실제 서버 URL (짧음)
+      }))
+
+      // 🔥 5. 미리보기용 Object URL 해제 (메모리 절약)
+      URL.revokeObjectURL(previewUrl)
+
       console.log('✅ 이미지 업로드 성공:', serverImageUrl)
     } catch (error) {
       alert(error instanceof Error ? error.message : '이미지 업로드에 실패했습니다.')
       console.error('❌ 이미지 업로드 에러:', error)
+
+      // 🔥 6. 업로드 실패시 이미지 제거
+      setNewPost(prev => ({ ...prev, image: null }))
     }
   }, [uploadImage])
 
-  const handleToggleStatus = useCallback((postToToggle: Post) => {
-    const updatedPost: Post = {
-      ...postToToggle,
-      status: postToToggle.status === "draft" ? "published" : "draft"
+// 🔥 추가: 컴포넌트 언마운트시 Object URL 정리
+  useEffect(() => {
+    return () => {
+      if (newPost.image && newPost.image.startsWith('blob:')) {
+        URL.revokeObjectURL(newPost.image)
+      }
+    }
+  }, [newPost.image])
+
+  // 🔥 수정 5: handleToggleStatus 함수 완전 수정 (서버 연동)
+  const handleToggleStatus = useCallback(async (postToToggle: Post) => {
+    if (!userId) {
+      alert("로그인이 필요합니다.")
+      return
     }
 
-    if (postToToggle.status === "draft") {
-      setDrafts(prev => prev.filter(d => d.id !== postToToggle.id))
-      setPublished(prev => [updatedPost, ...prev])
-    } else {
-      setPublished(prev => prev.filter(p => p.id !== postToToggle.id))
-      setDrafts(prev => [updatedPost, ...prev])
-    }
-  }, [setDrafts, setPublished])
+    const newStatus = postToToggle.status === "draft" ? "published" : "draft"
 
+    try {
+      const updateData: Partial<CreatePostData> = {
+        status: newStatus.toUpperCase() as "DRAFT" | "PUBLISHED"
+      }
+
+      await updatePost(postToToggle.id, userId, updateData)
+
+      // 성공시 로컬 상태 업데이트
+      const updatedPost: Post = {
+        ...postToToggle,
+        status: newStatus
+      }
+
+      if (postToToggle.status === "draft") {
+        setDrafts(prev => prev.filter(d => d.id !== postToToggle.id))
+        setPublished(prev => [updatedPost, ...prev])
+      } else {
+        setPublished(prev => prev.filter(p => p.id !== postToToggle.id))
+        setDrafts(prev => [updatedPost, ...prev])
+      }
+
+      alert(newStatus === "published" ? "글이 발행되었습니다!" : "글이 임시저장되었습니다!")
+
+    } catch (error) {
+      console.error("상태 변경 실패:", error)
+      alert("상태 변경에 실패했습니다.")
+    }
+  }, [userId, setDrafts, setPublished])
+
+  // 🔥 수정 6: handleDeletePost 함수 완전 수정 (post-api 함수 사용)
   const handleDeletePost = useCallback(async (postToDelete: Post) => {
-    // 삭제 확인
     if (!confirm("정말로 이 게시글을 삭제하시겠습니까?")) {
       return
     }
 
-    try {
-      // 서버에서 삭제
-      const response = await fetch(`${API_BASE_URL}/posts/${postToDelete.id}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem("authToken")}`,
-          'Content-Type': 'application/json'
-        }
-      })
+    if (!userId) {
+      alert("로그인이 필요합니다.")
+      return
+    }
 
-      if (response.ok) {
-        // 성공시 로컬 상태 업데이트
-        if (postToDelete.status === "draft") {
-          setDrafts(prev => prev.filter(d => d.id !== postToDelete.id))
-        } else {
-          setPublished(prev => prev.filter(p => p.id !== postToDelete.id))
-        }
-        alert("게시글이 삭제되었습니다.")
+    try {
+      await deletePost(postToDelete.id, userId)
+
+      // 성공시 로컬 상태 업데이트
+      if (postToDelete.status === "draft") {
+        setDrafts(prev => prev.filter(d => d.id !== postToDelete.id))
       } else {
-        throw new Error('삭제 요청 실패')
+        setPublished(prev => prev.filter(p => p.id !== postToDelete.id))
       }
+      alert("게시글이 삭제되었습니다.")
+
     } catch (error) {
       console.error("게시글 삭제 실패:", error)
       alert("게시글 삭제에 실패했습니다.")
     }
-  }, [setDrafts, setPublished])
+  }, [userId, setDrafts, setPublished])
 
   const handleCategorySelect = useCallback((category: Category) => {
     setSelectedCategoryKey(category.key)
@@ -396,6 +447,7 @@ export default function WritePage() {
     setCategoryType(type)
     setSelectedCategoryKey(null)
     setNewPost(prev => ({ ...prev, category: "" }))
+    setDisplayCategoryText("카테고리 선택")
   }, [])
 
   // PostCardDisplay 컴포넌트
@@ -549,7 +601,7 @@ export default function WritePage() {
                               variant="outline"
                               size="sm"
                               onClick={() => setShowPreview(true)}
-                              disabled={!newPost.content || !newPost.category}
+                              disabled={!newPost.content || !selectedCategoryKey}
                           >
                             <Eye className="h-4 w-4 mr-2" />
                             미리보기
@@ -662,9 +714,10 @@ export default function WritePage() {
                         {/* 이미지 업로드 */}
                         <div className="space-y-2">
                           <div
-                              className="border-2 border-dashed border-gray-300 rounded-md p-6 text-center"
+                              className="border-2 border-dashed border-gray-300 rounded-md p-6 text-center cursor-pointer"
                               onDragOver={(e) => e.preventDefault()}
                               onDrop={handleImageUpload}
+                              onClick={() => fileInputRef.current?.click()}
                           >
                             {newPost.image ? (
                                 <div className="relative">
@@ -677,7 +730,10 @@ export default function WritePage() {
                                       variant="outline"
                                       size="icon"
                                       className="absolute top-2 right-2 h-8 w-8 p-0 rounded-full bg-white"
-                                      onClick={() => setNewPost(prev => ({ ...prev, image: null }))}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setNewPost(prev => ({ ...prev, image: null }))
+                                      }}
                                       disabled={isUploading}
                                   >
                                     <X className="h-4 w-4" />
@@ -700,7 +756,6 @@ export default function WritePage() {
                                       variant="outline"
                                       size="sm"
                                       className="mt-2"
-                                      onClick={() => fileInputRef.current?.click()}
                                       disabled={isUploading}
                                   >
                                     {isUploading ? "업로드 중..." : "이미지 선택"}
@@ -719,13 +774,13 @@ export default function WritePage() {
                           <Button
                               variant="outline"
                               onClick={() => handleSavePost("draft")}
-                              disabled={!newPost.content || !newPost.category}
+                              disabled={!newPost.content || !selectedCategoryKey}
                           >
                             임시저장
                           </Button>
                           <Button
                               onClick={() => handleSavePost("published")}
-                              disabled={!newPost.content || !newPost.category}
+                              disabled={!newPost.content || !selectedCategoryKey}
                               className="bg-[#6366f1] hover:bg-[#6366f1]/90"
                           >
                             {editingPost ? "수정 완료" : "발행하기"}
@@ -734,17 +789,100 @@ export default function WritePage() {
                       </CardFooter>
                     </Card>
                 ) : (
-                    // 미리보기 모드는 기존과 동일하게 유지
-                    <div className="space-y-4">
-                      <div className="flex justify-between items-center">
-                        <h2 className="text-xl font-semibold">미리보기</h2>
-                        <Button variant="outline" size="sm" onClick={() => setShowPreview(false)}>
-                          <PenSquare className="h-4 w-4 mr-2" />
+                    // 🔥 수정 7: 미리보기 모드 추가
+                    <Card>
+                      <CardHeader>
+                        <div className="flex justify-between items-center">
+                          <h2 className="text-xl font-semibold">미리보기</h2>
+                          <Button variant="outline" size="sm" onClick={() => setShowPreview(false)}>
+                            <PenSquare className="h-4 w-4 mr-2" />
+                            편집으로 돌아가기
+                          </Button>
+                        </div>
+                      </CardHeader>
+
+                      <CardContent className="space-y-4">
+                        {/* 카테고리 표시 */}
+                        {selectedCategoryKey && (
+                            <div className="flex items-center gap-2">
+                              {(() => {
+                                const categoryInfo = allCategories.find(c => c.key === selectedCategoryKey)
+                                if (!categoryInfo) return null
+                                const CategoryIcon = categoryInfo.icon
+                                return (
+                                    <Badge
+                                        style={{ backgroundColor: `${categoryInfo.color}20`, color: categoryInfo.color }}
+                                        className="font-normal"
+                                    >
+                                      <CategoryIcon className="h-3 w-3 mr-1" />
+                                      {categoryInfo.label}
+                                    </Badge>
+                                )
+                              })()}
+                            </div>
+                        )}
+
+                        {/* 이미지 표시 */}
+                        {newPost.image && (
+                            <div className="mb-4">
+                              <img
+                                  src={newPost.image}
+                                  alt="Post preview"
+                                  className="mx-auto max-h-64 object-contain rounded-md"
+                              />
+                            </div>
+                        )}
+
+                        {/* 내용 표시 */}
+                        <div className="prose max-w-none">
+                          <p className="text-gray-700 whitespace-pre-line leading-relaxed">
+                            {newPost.content}
+                          </p>
+                        </div>
+
+                        {/* 해시태그 표시 */}
+                        {newPost.hashtags && (
+                            <div className="flex flex-wrap gap-2">
+                              {newPost.hashtags
+                                  .split(",")
+                                  .map(t => t.trim())
+                                  .filter(Boolean)
+                                  .map(t => t.startsWith("#") ? t : `#${t}`)
+                                  .map((tag, index) => (
+                                      <Badge
+                                          key={index}
+                                          variant="secondary"
+                                          className="text-xs bg-[#6366f1]/10 text-[#6366f1] hover:bg-[#6366f1]/20"
+                                      >
+                                        {tag}
+                                      </Badge>
+                                  ))}
+                            </div>
+                        )}
+                      </CardContent>
+
+                      <CardFooter className="flex items-center justify-between w-full">
+                        <Button variant="outline" onClick={() => setShowPreview(false)}>
                           편집으로 돌아가기
                         </Button>
-                      </div>
-                      {/* 미리보기 내용... (기존 코드와 동일) */}
-                    </div>
+                        <div className="space-x-2">
+                          <Button
+                              variant="outline"
+                              onClick={() => handleSavePost("draft")}
+                              disabled={!newPost.content || !selectedCategoryKey}
+                          >
+                            임시저장
+                          </Button>
+                          <Button
+                              onClick={() => handleSavePost("published")}
+                              disabled={!newPost.content || !selectedCategoryKey}
+                              className="bg-[#6366f1] hover:bg-[#6366f1]/90"
+                          >
+                            {editingPost ? "수정 완료" : "발행하기"}
+                          </Button>
+                        </div>
+                      </CardFooter>
+                    </Card>
                 )}
               </TabsContent>
 

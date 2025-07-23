@@ -93,7 +93,7 @@ export const performLogout = () => {
     }
 };
 
-//커뮤니티 로그인 세션
+//커뮤니티 로그인 세션 - 실제 로그인된 사용자만 사용
 export const getCurrentUserId = (): number | null => {
     if (typeof window !== "undefined") {
         const stored = localStorage.getItem("userId");

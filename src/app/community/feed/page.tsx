@@ -1,12 +1,11 @@
 "use client"
 
-"use client"
-
 import SideLayout from "../sidebar/SideLayout";
 import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation";
 import Image from "next/image"
 import { UpwardMenu } from "../components/upward-menu";
+// 🔥 수정 1: 타입 추가 import
 import {
   getPosts,
   getFollowingPosts,
@@ -15,7 +14,9 @@ import {
   toggleLike,
   addComment,
   toggleFollow,
-  checkFollowStatus
+  checkFollowStatus,
+  type PostResponse,
+  type ApiResponse
 } from "@/lib/post-api"
 import { getCurrentUserId } from "@/utils/auth"
 import { Button } from "@/components/ui/button"
@@ -96,6 +97,31 @@ const topicCategoriesList: Category[] = [
 
 const allCategories = [...jobCategoriesList, ...topicCategoriesList]
 
+// 🔥 수정 2: PostResponse를 Post로 변환하는 함수 추가
+const convertPostResponseToPost = (postResponse: PostResponse): Post => {
+  return {
+    id: postResponse.id,
+    author: {
+      id: postResponse.author.id,
+      name: postResponse.author.name,
+      avatar: postResponse.author.avatar || "/placeholder.svg",
+      title: postResponse.author.title || "사용자",
+      isFollowing: postResponse.author.isFollowing || false
+    },
+    title: postResponse.title,
+    content: postResponse.content,
+    imageUrl: postResponse.imageUrl,
+    hashtags: postResponse.hashtags,
+    likes: postResponse.likesCount,
+    comments: postResponse.commentsCount,
+    timeAgo: postResponse.timeAgo,
+    jobCategory: postResponse.jobCategory,
+    topicCategory: postResponse.topicCategory,
+    likedByMe: postResponse.likedByMe,
+    commentsList: [] // 기본값, 상세보기에서 별도 로딩
+  }
+}
+
 export default function FeedPage() {
   const [currentPostIndex] = useState(0)
   const [searchQuery, setSearchQuery] = useState("")
@@ -111,34 +137,102 @@ export default function FeedPage() {
   const userId = getCurrentUserId();
   const router = useRouter()
 
+  // 🔥 수정 3: useEffect 중복 제거 및 완전 수정
   useEffect(() => {
-    let isMounted = true; // 컴포넌트 마운트 상태 확인
+    let isMounted = true;
 
     const fetchData = async () => {
-      let fetchFunction = getPosts;
+      if (!isMounted) return;
+
+      setLoading(true); // 🔥 로딩 상태 설정
+
+      let fetchFunction: () => Promise<ApiResponse<PostResponse[]>>;
 
       if (feedMode === "following") {
-        fetchFunction = () => getFollowingPosts(userId || 1);
+        // 🔥 팔로우 모드일 때 사용자 ID 필수 체크
+        if (!userId) {
+          console.warn('⚠️ 팔로우 피드 요청했지만 사용자 ID가 없습니다.');
+          setPosts([]);
+          setLoading(false);
+          return;
+        }
+
+        console.log('🎯 팔로잉 사용자 게시글 요청:', userId);
+        fetchFunction = () => getFollowingPosts(userId);
       } else if (selectedCategoryKey) {
         fetchFunction = () => getPostsByCategory(selectedCategoryKey);
       } else if (searchQuery) {
         fetchFunction = () => searchPosts(searchQuery);
+      } else {
+        fetchFunction = () => getPosts();
       }
 
       try {
+        console.log('🔍 데이터 가져오기 시작...', { feedMode, userId, selectedCategoryKey, searchQuery });
         const res = await fetchFunction();
 
-        if (isMounted) { // 컴포넌트가 여전히 마운트되어 있는지 확인
-          setPosts(res.data);
-          setLoading(false);
+        if (isMounted && res.success) {
+          // 🔥 데이터가 있는지 확인
+          const posts = res.data || [];
+          console.log('✅ 데이터 가져오기 성공:', {
+            mode: feedMode,
+            postsCount: posts.length,
+            userId: userId
+          });
 
-          // 팔로우 상태 초기화 (조건부 실행)
-          if (userId && res.data.length > 0) {
-            await initializeFollowStates(res.data);
+          // 🔥 PostResponse를 Post로 변환
+          const convertedPosts = posts.map(convertPostResponseToPost);
+          setPosts(convertedPosts);
+
+          // 팔로우 상태 초기화
+          if (userId && convertedPosts.length > 0) {
+            await initializeFollowStates(convertedPosts);
+          }
+
+          // 🔥 팔로우 모드에서 결과가 없을 때 로그
+          if (feedMode === "following" && posts.length === 0) {
+            console.log('ℹ️ 팔로잉 사용자의 게시글이 없습니다.');
+          }
+        } else {
+          // 🔥 데이터가 없거나 실패한 경우
+          console.log('⚠️ 데이터 가져오기 실패 또는 빈 결과:', {
+            success: res.success,
+            message: res.message,
+            dataLength: res.data?.length || 0
+          });
+
+          if (isMounted) {
+            setPosts([]);
           }
         }
-      } catch (err) {
-        console.error("게시글 로딩 오류:", err);
+      } catch (err: any) {
+        console.error("❌ 게시글 로딩 오류:", err);
+
+        if (isMounted) {
+          setPosts([]);
+
+          // 개발 환경에서만 상세 에러 메시지 표시
+          if (process.env.NODE_ENV === 'development') {
+            console.log('⚠️ 백엔드 서버 연결 실패. 빈 피드를 표시합니다.');
+            console.log('백엔드 서버(localhost:8080)가 실행 중인지 확인해주세요.');
+
+            // 에러 타입별 상세 정보
+            const errorMessage = err?.message || err?.toString() || '알 수 없는 오류';
+            console.log('에러 메시지:', errorMessage);
+
+            if (errorMessage.includes('Network Error') ||
+                errorMessage.includes('ECONNREFUSED') ||
+                errorMessage.includes('fetch') ||
+                errorMessage.includes('500')) {
+              console.log('💡 해결 방법:');
+              console.log('   1. 백엔드 서버를 먼저 실행해주세요');
+              console.log('   2. 서버가 8080 포트에서 실행 중인지 확인해주세요');
+              console.log('   3. 서버의 CORS 설정을 확인해주세요');
+              console.log('   4. 방화벽이나 보안 소프트웨어가 차단하지 않는지 확인해주세요');
+            }
+          }
+        }
+      } finally {
         if (isMounted) {
           setLoading(false);
         }
@@ -153,7 +247,7 @@ export default function FeedPage() {
     };
   }, [feedMode, selectedCategoryKey, searchQuery, userId]);
 
-  // 🔥 새로 추가: 팔로우 상태 초기화 함수 (post-api.ts 함수 사용)
+  // 🔥 수정 4: 팔로우 상태 초기화 함수 개선
   const initializeFollowStates = async (postList: Post[]) => {
     if (!userId || postList.length === 0) return;
 
@@ -186,7 +280,7 @@ export default function FeedPage() {
 
           // post-api.ts의 checkFollowStatus 함수 사용
           const response = await checkFollowStatus(userId, authorId);
-          
+
           const isFollowing = response.data?.isFollowing || false;
           followStatusMap.set(authorId, isFollowing);
           console.log(`✅ 작성자 ID ${authorId}: ${isFollowing ? '팔로잉' : '팔로우 안함'}`);
@@ -222,7 +316,7 @@ export default function FeedPage() {
     }
   };
 
-  // 🔥 페이지 포커스 시 팔로우 상태 새로고침 (선택사항)
+  // 🔥 수정 5: 페이지 포커스 시 팔로우 상태 새로고침 개선
   useEffect(() => {
     let focusTimeout: NodeJS.Timeout;
 
@@ -256,7 +350,14 @@ export default function FeedPage() {
     setSelectedCategoryKey(key === selectedCategoryKey ? null : key)
   }
 
-  const handleLikeToggle = (postId: number) => {
+  // 🔥 수정 6: handleLikeToggle 함수 개선 (에러 핸들링 추가)
+  const handleLikeToggle = async (postId: number) => {
+    if (!userId) {
+      alert('로그인이 필요합니다.');
+      return;
+    }
+
+    // 낙관적 업데이트
     const newPosts = posts.map(p =>
         p.id === postId ? { ...p, likedByMe: !p.likedByMe, likes: p.likedByMe ? p.likes - 1 : p.likes + 1 } : p
     )
@@ -268,13 +369,46 @@ export default function FeedPage() {
       )
     }
 
-    if (userId != null) {
-      toggleLike(postId, userId);
+    try {
+      // 서버에 좋아요 토글 요청
+      const response = await toggleLike(postId, userId);
+
+      if (response.success && response.data) {
+        // 서버 응답에 따라 최종 상태 업데이트
+        const serverLikedState = response.data.isLiked;
+        const serverLikesCount = response.data.likesCount;
+
+        const finalPosts = posts.map(p =>
+            p.id === postId ? { ...p, likedByMe: serverLikedState, likes: serverLikesCount } : p
+        )
+        setPosts(finalPosts)
+
+        if (detailedPost && detailedPost.id === postId) {
+          setDetailedPost(prev =>
+              prev ? { ...prev, likedByMe: serverLikedState, likes: serverLikesCount } : null
+          )
+        }
+      }
+    } catch (error) {
+      console.error('❌ 좋아요 처리 실패:', error);
+
+      // 실패 시 원래 상태로 되돌리기
+      const revertedPosts = posts.map(p => {
+        const originalPost = posts.find(op => op.id === postId);
+        return p.id === postId && originalPost ? originalPost : p;
+      });
+      setPosts(revertedPosts);
+
+      if (detailedPost && detailedPost.id === postId) {
+        const originalDetailedPost = posts.find(p => p.id === postId);
+        if (originalDetailedPost) {
+          setDetailedPost(originalDetailedPost);
+        }
+      }
     }
   }
 
-  // 피드 페이지의 handleFollowToggle 함수 - CommunityProfile 기반으로 완전 수정
-// 🔥 수정된 handleFollowToggle 함수 (post-api.ts의 toggleFollow 사용)
+  // 🔥 수정 7: handleFollowToggle 함수 완전 수정
   const handleFollowToggle = async (authorName: string, targetUserId: number) => {
     console.log('🎯 팔로우 토글 시도:', { authorName, targetUserId, currentUserId: userId });
 
@@ -317,10 +451,10 @@ export default function FeedPage() {
 
       // post-api.ts의 toggleFollow 함수 사용
       const response = await toggleFollow(userId, targetUserId);
-      
+
       console.log('✅ 팔로우 토글 응답:', response.data);
 
-      if (response.data.success) {
+      if (response.success && response.data && response.data.success) {
         const serverFollowingState = response.data.following;
         console.log('🎯 서버에서 확인된 팔로우 상태:', serverFollowingState);
 
@@ -343,9 +477,9 @@ export default function FeedPage() {
         console.log(`🎉 ${actionText} 성공!`);
 
       } else {
-        console.error('❌ 팔로우 처리 실패:', response.data.message);
+        console.error('❌ 팔로우 처리 실패:', response.message);
         alert('팔로우 처리에 실패했습니다.');
-        
+
         // 실패 시 원래 상태로 되돌리기
         const revertedPosts = posts.map(p =>
             p.author.id === targetUserId
@@ -353,10 +487,16 @@ export default function FeedPage() {
                 : p
         );
         setPosts(revertedPosts);
+
+        if (detailedPost && detailedPost.author.id === targetUserId) {
+          setDetailedPost(prev =>
+              prev ? { ...prev, author: { ...prev.author, isFollowing: isCurrentlyFollowing } } : null
+          );
+        }
       }
     } catch (error) {
       console.error('❌ 팔로우 토글 중 오류:', error);
-      
+
       // 상세한 에러 정보 표시
       let errorMessage = '팔로우 처리 중 오류가 발생했습니다.';
       if (error instanceof Error) {
@@ -366,7 +506,7 @@ export default function FeedPage() {
           errorMessage = '네트워크 연결을 확인해주세요.';
         }
       }
-      
+
       alert(errorMessage);
 
       // 오류 시 원래 상태로 되돌리기
@@ -386,13 +526,16 @@ export default function FeedPage() {
     }
   };
 
-  const handleCommentSubmit = () => {
-    if (!newComment.trim() || !detailedPost || typeof userId !== "number") return;
+  // 🔥 수정 8: handleCommentSubmit 함수 개선
+  const handleCommentSubmit = async () => {
+    if (!newComment.trim() || !detailedPost || typeof userId !== "number") {
+      if (!userId) {
+        alert('로그인이 필요합니다.');
+      }
+      return;
+    }
 
-    addComment(detailedPost.id, userId, newComment)
-        .then(() => setNewComment(""))
-        .catch(console.error);
-
+    // 낙관적 업데이트용 임시 댓글
     const newCommentObj: Comment = {
       id: `temp-${Date.now()}`,
       author: { name: "Current User", avatar: "/placeholder.svg", title: "Test User Title" },
@@ -401,6 +544,7 @@ export default function FeedPage() {
       timeAgo: "방금 전",
     }
 
+    // UI 즉시 업데이트
     const updatedPosts = posts.map(p =>
         p.id === detailedPost.id
             ? { ...p, comments: p.comments + 1, commentsList: [...(p.commentsList || []), newCommentObj] }
@@ -411,7 +555,46 @@ export default function FeedPage() {
     setDetailedPost(prev =>
         prev ? { ...prev, comments: prev.comments + 1, commentsList: [...(prev.commentsList || []), newCommentObj] } : null
     )
+
+    // 입력 필드 초기화
+    const commentText = newComment;
+    setNewComment("");
+
+    try {
+      // 서버에 댓글 추가 요청
+      const response = await addComment(detailedPost.id, userId, commentText);
+
+      if (response.success) {
+        console.log('✅ 댓글 추가 성공');
+        // 성공 시에는 임시 댓글을 그대로 유지하거나 서버 응답으로 대체
+      } else {
+        throw new Error(response.message || '댓글 추가에 실패했습니다.');
+      }
+    } catch (error) {
+      console.error('❌ 댓글 추가 실패:', error);
+      alert('댓글 추가에 실패했습니다.');
+
+      // 실패 시 원래 상태로 되돌리기
+      const revertedPosts = posts.map(p =>
+          p.id === detailedPost.id
+              ? { ...p, comments: p.comments - 1, commentsList: (p.commentsList || []).filter(c => c.id !== newCommentObj.id) }
+              : p
+      )
+      setPosts(revertedPosts)
+
+      setDetailedPost(prev =>
+          prev ? {
+            ...prev,
+            comments: prev.comments - 1,
+            commentsList: (prev.commentsList || []).filter(c => c.id !== newCommentObj.id)
+          } : null
+      )
+
+      // 입력 필드 복원
+      setNewComment(commentText);
+    }
   }
+
   if (loading) return <div className="flex justify-center items-center h-full">로딩중...</div>
 
   return (
@@ -494,21 +677,65 @@ export default function FeedPage() {
               </div>
 
               {/* 게시글 Carousel */}
-              <div className="carousel-container-wrapper">
-                <Carousel initialActiveIndex={currentPostIndex} onCardClick={handleOpenPostDetail}>
-                  {posts.map((post) => (
-                      <AdaptedPostCard
-                          key={post.id}
-                          post={post}
-                          allCategories={allCategories}
-                          onCardClick={handleOpenPostDetail}
-                          onLike={handleLikeToggle}
-                          onFollowToggle={() => handleFollowToggle(post.author.name, post.author.id)}
-                          isActive={false}
-                      />
-                  ))}
-                </Carousel>
-              </div>
+              {posts.length > 0 ? (
+                  <div className="carousel-container-wrapper">
+                    <Carousel initialActiveIndex={currentPostIndex} onCardClick={handleOpenPostDetail}>
+                      {posts.map((post) => (
+                          <AdaptedPostCard
+                              key={post.id}
+                              post={post}
+                              allCategories={allCategories}
+                              onCardClick={handleOpenPostDetail}
+                              onLike={handleLikeToggle}
+                              onFollowToggle={() => handleFollowToggle(post.author.name, post.author.id)}
+                              isActive={false}
+                          />
+                      ))}
+                    </Carousel>
+                  </div>
+              ) : (
+                  <div className="flex flex-col items-center justify-center py-20 text-center">
+                    <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-6">
+                      <Rss className="h-12 w-12 text-gray-400" />
+                    </div>
+                    <h3 className="text-xl font-semibold text-gray-700 mb-2">
+                      {loading ? "로딩 중..." : "게시글이 없습니다"}
+                    </h3>
+                    <p className="text-gray-500 mb-6 max-w-md">
+                      {loading ? "잠시만 기다려주세요..." :
+                          feedMode === "following"
+                              ? "팔로우한 사용자의 게시글이 없습니다. 더 많은 사람들을 팔로우해보세요!"
+                              : selectedCategoryKey
+                                  ? "선택한 카테고리에 게시글이 없습니다. 다른 카테고리를 확인해보세요."
+                                  : searchQuery
+                                      ? `'${searchQuery}'에 대한 검색 결과가 없습니다.`
+                                      : "아직 게시글이 없습니다. 첫 번째 게시글을 작성해보세요!"
+                      }
+                    </p>
+                    {!loading && (
+                        <Button
+                            onClick={() => router.push("/community/write")}
+                            className="bg-[#6366f1] hover:bg-[#6366f1]/90 text-white px-6 py-2"
+                        >
+                          게시글 작성하기
+                        </Button>
+                    )}
+
+                    {!loading && process.env.NODE_ENV === 'development' && (
+                        <div className="mt-8 p-4 bg-blue-50 border border-blue-200 rounded-lg max-w-md">
+                          <p className="text-sm text-blue-800">
+                            <strong>📝 데모 모드:</strong> 백엔드 서버가 연결되지 않아 목 데이터를 표시 중입니다.
+                            <br />실제 서버 연결 시 모든 기능이 정상 작동합니다.
+                            {feedMode === "following" && (
+                                <>
+                                  <br /><strong>팔로우 피드:</strong> 팔로우한 사용자가 있고 해당 사용자들이 게시글을 작성했는지 확인해주세요.
+                                </>
+                            )}
+                          </p>
+                        </div>
+                    )}
+                  </div>
+              )}
             </div>
           </div>
 
@@ -523,216 +750,219 @@ export default function FeedPage() {
 
         {/* 상세보기 모달 */}
         {detailedPost && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <Dialog open={!!detailedPost} onOpenChange={() => setDetailedPost(null)}>
-              <DialogContent
-                  className="w-full max-w-3xl sm:p-6 p-4 h-[85vh] max-h-[900px] flex flex-col overflow-hidden mx-auto md:ml-[10rem]">
-                <DialogHeader className="p-6 pb-3 border-b border-gray-100 flex-shrink-0">
-                  <div className="flex items-center justify-between w-full">
-                    <div className="flex items-center gap-3">
-                      <Avatar className="h-10 w-10">
-                        <AvatarImage src={detailedPost.author.avatar || "/placeholder.svg"} />
-                        <AvatarFallback>{detailedPost.author.name[0]}</AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <DialogTitle className="text-base font-semibold">{detailedPost.author.name}</DialogTitle>
-                        <DialogDescription className="text-xs text-gray-500">
-                          {detailedPost.author.title} · {detailedPost.timeAgo}
-                        </DialogDescription>
+            <div className="fixed inset-0 z-50 flex items-center justify-center">
+              <Dialog open={!!detailedPost} onOpenChange={() => setDetailedPost(null)}>
+                <DialogContent
+                    className="w-full max-w-3xl sm:p-6 p-4 h-[85vh] max-h-[900px] flex flex-col overflow-hidden mx-auto md:ml-[10rem]">
+                  <DialogHeader className="p-6 pb-3 border-b border-gray-100 flex-shrink-0">
+                    <div className="flex items-center justify-between w-full">
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-10 w-10">
+                          <AvatarImage src={detailedPost.author.avatar || "/placeholder.svg"} />
+                          <AvatarFallback>{detailedPost.author.name[0]}</AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <DialogTitle className="text-base font-semibold">{detailedPost.author.name}</DialogTitle>
+                          <DialogDescription className="text-xs text-gray-500">
+                            {detailedPost.author.title} · {detailedPost.timeAgo}
+                          </DialogDescription>
+                        </div>
                       </div>
+                      {/* 🔥 수정 9: 자기 자신의 게시글에는 팔로우 버튼 숨김 */}
+                      {detailedPost.author.id !== userId && (
+                          <Button
+                              variant={detailedPost.author.isFollowing ? "default" : "outline"}
+                              size="sm"
+                              onClick={() => handleFollowToggle(detailedPost.author.name, detailedPost.author.id)}
+                              className={`${detailedPost.author.isFollowing ? "bg-violet-500 hover:bg-violet-600 text-white" : "border-violet-500 text-violet-500 hover:bg-violet-50"}`}
+                          >
+                            {detailedPost.author.isFollowing ? (
+                                <UserCheck className="h-4 w-4 mr-1.5" />
+                            ) : (
+                                <UserPlus className="h-4 w-4 mr-1.5" />
+                            )}
+                            {detailedPost.author.isFollowing ? "팔로잉" : "팔로우"}
+                          </Button>
+                      )}
                     </div>
-                    <Button
-                        variant={detailedPost.author.isFollowing ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => handleFollowToggle(detailedPost.author.name, detailedPost.author.id)}
-                        className={`${detailedPost.author.isFollowing ? "bg-violet-500 hover:bg-violet-600 text-white" : "border-violet-500 text-violet-500 hover:bg-violet-50"}`}
-                    >
-                      {detailedPost.author.isFollowing ? (
-                          <UserCheck className="h-4 w-4 mr-1.5" />
-                      ) : (
-                          <UserPlus className="h-4 w-4 mr-1.5" />
-                      )}
-                      {detailedPost.author.isFollowing ? "팔로잉" : "팔로우"}
-                    </Button>
+                  </DialogHeader>
 
-                  </div>
-                </DialogHeader>
+                  <Tabs defaultValue="post" className="flex-1 flex flex-col overflow-hidden">
+                    <TabsList className="grid w-full grid-cols-2 bg-transparent px-6 py-2 border-b border-gray-100">
+                      <TabsTrigger value="post" className="text-sm font-medium px-2 py-2 data-[state=active]:text-black data-[state=inactive]:text-gray-400">
+                        게시글
+                      </TabsTrigger>
+                      <TabsTrigger value="comments" className="text-sm font-medium px-2 py-2 data-[state=active]:text-black data-[state=inactive]:text-gray-400">
+                        댓글 {detailedPost.commentsList?.length || 0}개
+                      </TabsTrigger>
+                    </TabsList>
 
-                <Tabs defaultValue="post" className="flex-1 flex flex-col overflow-hidden">
-                  <TabsList className="grid w-full grid-cols-2 bg-transparent px-6 py-2 border-b border-gray-100">
-                    <TabsTrigger value="post" className="text-sm font-medium px-2 py-2 data-[state=active]:text-black data-[state=inactive]:text-gray-400">
-                      게시글
-                    </TabsTrigger>
-                    <TabsTrigger value="comments" className="text-sm font-medium px-2 py-2 data-[state=active]:text-black data-[state=inactive]:text-gray-400">
-                      댓글 {detailedPost.commentsList?.length || 0}개
-                    </TabsTrigger>
-                  </TabsList>
-
-                  {/* 게시글 탭 */}
-                  <TabsContent value="post" className="flex-1 px-6 py-4 overflow-auto bg-white"
-                               style={{ minHeight: '500px', maxHeight: 'calc(85vh - 150px)' }}>
-                    <div className="space-y-4 pr-2">
-                      {detailedPost.imageUrl && (
-                          <div className="relative w-full h-[300px] bg-gray-100 rounded-md">
-                            {detailedPost.imageUrl?.trim() ? (
-                                <div className="relative w-full h-[300px] bg-gray-100 rounded-md">
-                                  <Image
-                                      src={detailedPost.imageUrl.trim()}
-                                      alt={"Post image"}
-                                      fill
-                                      style={{ objectFit: "contain" }}
-                                      className="rounded-md"
-                                  />
-                                </div>
-                            ) : null}
-                          </div>
-                      )}
-                      <p className="text-gray-700 whitespace-pre-line leading-relaxed text-base">
-                        {detailedPost.content}
-                      </p>
-                      <div className="flex flex-wrap gap-2 pt-4">
-                        {detailedPost.hashtags.map((tag, index) => (
-                            <Badge
-                                key={index}
-                                variant="secondary"
-                                className="text-xs bg-violet-100 text-violet-700 hover:bg-violet-200"
-                            >
-                              {tag}
-                            </Badge>
-                        ))}
+                    {/* 게시글 탭 */}
+                    <TabsContent value="post" className="flex-1 px-6 py-4 overflow-auto bg-white"
+                                 style={{ minHeight: '500px', maxHeight: 'calc(85vh - 150px)' }}>
+                      <div className="space-y-4 pr-2">
+                        {detailedPost.imageUrl && (
+                            <div className="relative w-full h-[300px] bg-gray-100 rounded-md">
+                              {detailedPost.imageUrl?.trim() ? (
+                                  <div className="relative w-full h-[300px] bg-gray-100 rounded-md">
+                                    <Image
+                                        src={detailedPost.imageUrl.trim()}
+                                        alt={"Post image"}
+                                        fill
+                                        style={{ objectFit: "contain" }}
+                                        className="rounded-md"
+                                        onError={(e) => {
+                                          console.error('이미지 로딩 실패:', detailedPost.imageUrl);
+                                          e.currentTarget.style.display = 'none';
+                                        }}
+                                    />
+                                  </div>
+                              ) : null}
+                            </div>
+                        )}
+                        <p className="text-gray-700 whitespace-pre-line leading-relaxed text-base">
+                          {detailedPost.content}
+                        </p>
+                        <div className="flex flex-wrap gap-2 pt-4">
+                          {detailedPost.hashtags.map((tag, index) => (
+                              <Badge
+                                  key={index}
+                                  variant="secondary"
+                                  className="text-xs bg-violet-100 text-violet-700 hover:bg-violet-200"
+                              >
+                                {tag}
+                              </Badge>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  </TabsContent>
+                    </TabsContent>
 
-                  {/* 댓글 탭 */}
-                  <TabsContent value="comments" className="flex-1 flex flex-col min-h-0">
-                    <div className="flex-1 overflow-auto px-6 py-4">
-                      {detailedPost.commentsList && detailedPost.commentsList.length > 0 ? (
-                          <div className="space-y-4">
-                            {detailedPost.commentsList.slice(0, visibleComments).map((comment) => (
-                                <div key={comment.id} className="py-3 border-b border-gray-100 last:border-b-0">
-                                  <div className="flex items-start gap-3">
-                                    <Avatar className="h-8 w-8 flex-shrink-0">
-                                      <AvatarImage src={comment.author.avatar || "/placeholder.svg"} />
-                                      <AvatarFallback>{comment.author.name[0]}</AvatarFallback>
-                                    </Avatar>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-2 mb-1">
-                                        <p className="font-semibold text-sm truncate">{comment.author.name}</p>
-                                        {comment.author.title && (
-                                            <p className="text-xs text-gray-500 truncate">{comment.author.title}</p>
-                                        )}
-                                        <p className="text-xs text-gray-400 ml-auto flex-shrink-0">{comment.timeAgo}</p>
-                                      </div>
-                                      <p className="text-sm text-gray-700 break-words">{comment.content}</p>
-                                      <div className="flex items-center gap-4 mt-2">
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            className="text-xs text-gray-500 hover:text-red-500 p-0 h-auto"
-                                        >
-                                          <Heart className="h-3 w-3 mr-1" />
-                                          {comment.likes}
-                                        </Button>
+                    {/* 댓글 탭 */}
+                    <TabsContent value="comments" className="flex-1 flex flex-col min-h-0">
+                      <div className="flex-1 overflow-auto px-6 py-4">
+                        {detailedPost.commentsList && detailedPost.commentsList.length > 0 ? (
+                            <div className="space-y-4">
+                              {detailedPost.commentsList.slice(0, visibleComments).map((comment) => (
+                                  <div key={comment.id} className="py-3 border-b border-gray-100 last:border-b-0">
+                                    <div className="flex items-start gap-3">
+                                      <Avatar className="h-8 w-8 flex-shrink-0">
+                                        <AvatarImage src={comment.author.avatar || "/placeholder.svg"} />
+                                        <AvatarFallback>{comment.author.name[0]}</AvatarFallback>
+                                      </Avatar>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 mb-1">
+                                          <p className="font-semibold text-sm truncate">{comment.author.name}</p>
+                                          {comment.author.title && (
+                                              <p className="text-xs text-gray-500 truncate">{comment.author.title}</p>
+                                          )}
+                                          <p className="text-xs text-gray-400 ml-auto flex-shrink-0">{comment.timeAgo}</p>
+                                        </div>
+                                        <p className="text-sm text-gray-700 break-words">{comment.content}</p>
+                                        <div className="flex items-center gap-4 mt-2">
+                                          <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              className="text-xs text-gray-500 hover:text-red-500 p-0 h-auto"
+                                          >
+                                            <Heart className="h-3 w-3 mr-1" />
+                                            {comment.likes}
+                                          </Button>
+                                        </div>
                                       </div>
                                     </div>
                                   </div>
-                                </div>
-                            ))}
+                              ))}
 
-                            {visibleComments < (detailedPost.commentsList?.length || 0) && (
-                                <div className="text-center py-4">
-                                  <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="text-violet-600 hover:bg-violet-50"
-                                      onClick={() => setVisibleComments((prev) => prev + 5)}
-                                  >
-                                    댓글 더 보기 ({detailedPost.commentsList!.length - visibleComments}개 남음)
-                                  </Button>
-                                </div>
-                            )}
-                          </div>
-                      ) : (
-                          <div className="flex-1 flex items-center justify-center text-gray-500">
-                            <div className="text-center">
-                              <MessageCircle className="h-12 w-12 mx-auto mb-2 text-gray-300" />
-                              <p>아직 댓글이 없습니다.</p>
-                              <p className="text-sm">첫 번째 댓글을 작성해보세요!</p>
+                              {visibleComments < (detailedPost.commentsList?.length || 0) && (
+                                  <div className="text-center py-4">
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-violet-600 hover:bg-violet-50"
+                                        onClick={() => setVisibleComments((prev) => prev + 5)}
+                                    >
+                                      댓글 더 보기 ({detailedPost.commentsList!.length - visibleComments}개 남음)
+                                    </Button>
+                                  </div>
+                              )}
                             </div>
-                          </div>
-                      )}
-                    </div>
+                        ) : (
+                            <div className="flex-1 flex items-center justify-center text-gray-500">
+                              <div className="text-center">
+                                <MessageCircle className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+                                <p>아직 댓글이 없습니다.</p>
+                                <p className="text-sm">첫 번째 댓글을 작성해보세요!</p>
+                              </div>
+                            </div>
+                        )}
+                      </div>
 
-                    <div className="bg-gray-50 p-4 flex-shrink-0">
-                      <div className="border-t border-gray-200 bg-gray-50 p-4 flex items-center gap-3">
-                        <Avatar className="h-8 w-8 flex-shrink-0">
-                          <AvatarImage src="/placeholder.svg" />
-                          <AvatarFallback>CU</AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 flex items-center gap-2 bg-white rounded-md px-3 py-2">
-                          <Textarea
-                              placeholder="댓글을 작성하세요"
-                              value={newComment}
-                              onChange={(e) => setNewComment(e.target.value)}
-                              className="flex-1 resize-none border-gray-300 focus:border-violet-500 focus:ring-violet-500 rounded-md text-sm min-h-[40px] max-h-[120px]"
-                              rows={2}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                  e.preventDefault()
-                                  handleCommentSubmit()
-                                }
-                              }}
-                          />
-                          <Button
-                              size="icon"
-                              className="rounded-full p-2 bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50"
-                              onClick={handleCommentSubmit}
-                              disabled={!newComment.trim()}
-                          >
-                            <Send className="h-4 w-4" />
-                          </Button>
+                      {/* 🔥 수정 10: 댓글 입력 섹션 개선 */}
+                      <div className="bg-gray-50 p-4 flex-shrink-0">
+                        <div className="border-t border-gray-200 bg-gray-50 p-4 flex items-center gap-3">
+                          <Avatar className="h-8 w-8 flex-shrink-0">
+                            <AvatarImage src="/placeholder.svg" />
+                            <AvatarFallback>CU</AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 flex items-center gap-2 bg-white rounded-md px-3 py-2">
+                            <Textarea
+                                placeholder="댓글을 작성하세요"
+                                value={newComment}
+                                onChange={(e) => setNewComment(e.target.value)}
+                                className="flex-1 resize-none border-gray-300 focus:border-violet-500 focus:ring-violet-500 rounded-md text-sm min-h-[40px] max-h-[120px]"
+                                rows={2}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault()
+                                    handleCommentSubmit()
+                                  }
+                                }}
+                            />
+                            <Button
+                                size="icon"
+                                className="rounded-full p-2 bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50"
+                                onClick={handleCommentSubmit}
+                                disabled={!newComment.trim()}
+                            >
+                              <Send className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </TabsContent>
-                </Tabs>
+                    </TabsContent>
+                  </Tabs>
 
-                <div className="border-t border-gray-100 p-4 flex-shrink-0">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-gray-600 hover:text-red-500"
-                          onClick={() => handleLikeToggle(detailedPost.id)}
-                      >
-                        <Heart
-                            className="h-4 w-4 mr-1"
-                            fill={detailedPost.likedByMe ? "#e11d48" : "none"}
-                            stroke={detailedPost.likedByMe ? "none" : "#6b7280"}
-                        />
-                        {detailedPost.likes}
-                      </Button>
-                      <Button variant="ghost" size="sm" className="text-gray-600 hover:text-violet-500">
-                        <MessageCircle className="h-4 w-4 mr-1" />
-                        {detailedPost.comments}
-                      </Button>
-                      {/*<Button variant="ghost" size="sm" className="text-gray-600 hover:text-green-500">
-                        <Share2 className="h-4 w-4 mr-1" />
-                        공유
-                      </Button>*/}
-                      <Button variant="ghost" size="sm" className="text-gray-600 hover:text-orange-500">
-                        <Bookmark className="h-4 w-4 mr-1" />
-                        저장
-                      </Button>
+                  <div className="border-t border-gray-100 p-4 flex-shrink-0">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-gray-600 hover:text-red-500"
+                            onClick={() => handleLikeToggle(detailedPost.id)}
+                        >
+                          <Heart
+                              className="h-4 w-4 mr-1"
+                              fill={detailedPost.likedByMe ? "#e11d48" : "none"}
+                              stroke={detailedPost.likedByMe ? "none" : "#6b7280"}
+                          />
+                          {detailedPost.likes}
+                        </Button>
+                        <Button variant="ghost" size="sm" className="text-gray-600 hover:text-violet-500">
+                          <MessageCircle className="h-4 w-4 mr-1" />
+                          {detailedPost.comments}
+                        </Button>
+                        <Button variant="ghost" size="sm" className="text-gray-600 hover:text-orange-500">
+                          <Bookmark className="h-4 w-4 mr-1" />
+                          저장
+                        </Button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </DialogContent>
-            </Dialog>
-        </div>
+                </DialogContent>
+              </Dialog>
+            </div>
         )}
-    </SideLayout>
+      </SideLayout>
   )
 }
