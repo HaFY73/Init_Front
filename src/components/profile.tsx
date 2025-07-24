@@ -233,10 +233,29 @@ export default function ProfileDialog() {
       })
 
       if (response.ok) {
-        alert("프로필이 저장되었습니다")
+        const savedProfile = await response.json()
+
+        // 🔥 프로필 생성/수정 성공 알림
+        alert(profile.id ? "프로필이 수정되었습니다!" : "프로필이 생성되었습니다! 이제 글 작성과 팔로우 기능을 사용할 수 있습니다.")
+
+        // 🔥 전역 이벤트 발생시켜서 다른 컴포넌트들에 알림
+        window.dispatchEvent(new CustomEvent('profileUpdated', {
+          detail: { profile: savedProfile, isNewProfile: !profile.id }
+        }))
+
         setIsOpen(false)
+
+        // 🔥 현재 페이지가 피드나 글쓰기 페이지라면 새로고침 제안
+        const currentPath = window.location.pathname
+        if ((currentPath.includes('/feed') || currentPath.includes('/write')) && !profile.id) {
+          if (confirm('프로필이 생성되었습니다! 페이지를 새로고침하여 모든 기능을 활성화하시겠습니까?')) {
+            window.location.reload()
+          }
+        }
+
       } else {
         const errorText = await response.text()
+        console.error('프로필 저장 실패:', errorText)
         alert(`저장 실패: ${errorText}`)
       }
     } catch (err) {

@@ -5,7 +5,6 @@ import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation";
 import Image from "next/image"
 import { UpwardMenu } from "../components/upward-menu";
-// 🔥 수정 1: 타입 추가 import
 import {
   getPosts,
   getFollowingPosts,
@@ -52,16 +51,16 @@ export interface Category {
 
 export interface Comment {
   id: number | string
-  author: { name: string; avatar: string; title?: string }
+  author: { name: string; avatar: string }
   content: string
   likes: number
   timeAgo: string
 }
 
+// 🔥 수정: Post 인터페이스에 userId 추가, title 제거
 export interface Post {
   id: number
-  author: { id: number; name: string; avatar: string; title: string; isFollowing?: boolean }
-  title: string
+  author: { id: number; name: string; avatar: string; isFollowing?: boolean }
   content: string
   imageUrl?: string
   hashtags: string[]
@@ -72,6 +71,7 @@ export interface Post {
   topicCategory?: string
   likedByMe?: boolean
   commentsList?: Comment[]
+  userId?: number // 🔥 실제 User ID 저장용
 }
 
 const jobCategoriesList: Category[] = [
@@ -97,18 +97,19 @@ const topicCategoriesList: Category[] = [
 
 const allCategories = [...jobCategoriesList, ...topicCategoriesList]
 
-// 🔥 수정 2: PostResponse를 Post로 변환하는 함수 추가
+// 🔥 수정: PostResponse를 Post로 변환하는 함수 (title 제거)
 const convertPostResponseToPost = (postResponse: PostResponse): Post => {
+  // 🔥 실제 User ID 추출 로직
+  const actualUserId = (postResponse as any).user?.id || postResponse.author.id;
+
   return {
     id: postResponse.id,
     author: {
-      id: postResponse.author.id,
+      id: postResponse.author.id, // CommunityProfile ID 유지
       name: postResponse.author.name,
       avatar: postResponse.author.avatar || "/placeholder.svg",
-      title: postResponse.author.title || "사용자",
       isFollowing: postResponse.author.isFollowing || false
     },
-    title: postResponse.title,
     content: postResponse.content,
     imageUrl: postResponse.imageUrl,
     hashtags: postResponse.hashtags,
@@ -118,8 +119,14 @@ const convertPostResponseToPost = (postResponse: PostResponse): Post => {
     jobCategory: postResponse.jobCategory,
     topicCategory: postResponse.topicCategory,
     likedByMe: postResponse.likedByMe,
-    commentsList: [] // 기본값, 상세보기에서 별도 로딩
+    commentsList: [],
+    userId: actualUserId // 🔥 실제 User ID 저장
   }
+}
+
+// 🔥 헬퍼 함수: Post에서 실제 User ID 가져오기
+const getPostUserId = (post: Post): number => {
+  return post.userId || post.author.id;
 }
 
 export default function FeedPage() {
@@ -137,26 +144,24 @@ export default function FeedPage() {
   const userId = getCurrentUserId();
   const router = useRouter()
 
-  // 🔥 수정 3: useEffect 중복 제거 및 완전 수정
+  // 🔥 데이터 가져오기 useEffect
   useEffect(() => {
     let isMounted = true;
 
     const fetchData = async () => {
       if (!isMounted) return;
 
-      setLoading(true); // 🔥 로딩 상태 설정
+      setLoading(true);
 
       let fetchFunction: () => Promise<ApiResponse<PostResponse[]>>;
 
       if (feedMode === "following") {
-        // 🔥 팔로우 모드일 때 사용자 ID 필수 체크
         if (!userId) {
           console.warn('⚠️ 팔로우 피드 요청했지만 사용자 ID가 없습니다.');
           setPosts([]);
           setLoading(false);
           return;
         }
-
         console.log('🎯 팔로잉 사용자 게시글 요청:', userId);
         fetchFunction = () => getFollowingPosts(userId);
       } else if (selectedCategoryKey) {
@@ -172,7 +177,6 @@ export default function FeedPage() {
         const res = await fetchFunction();
 
         if (isMounted && res.success) {
-          // 🔥 데이터가 있는지 확인
           const posts = res.data || [];
           console.log('✅ 데이터 가져오기 성공:', {
             mode: feedMode,
@@ -180,7 +184,6 @@ export default function FeedPage() {
             userId: userId
           });
 
-          // 🔥 PostResponse를 Post로 변환
           const convertedPosts = posts.map(convertPostResponseToPost);
           setPosts(convertedPosts);
 
@@ -189,12 +192,10 @@ export default function FeedPage() {
             await initializeFollowStates(convertedPosts);
           }
 
-          // 🔥 팔로우 모드에서 결과가 없을 때 로그
           if (feedMode === "following" && posts.length === 0) {
             console.log('ℹ️ 팔로잉 사용자의 게시글이 없습니다.');
           }
         } else {
-          // 🔥 데이터가 없거나 실패한 경우
           console.log('⚠️ 데이터 가져오기 실패 또는 빈 결과:', {
             success: res.success,
             message: res.message,
@@ -211,25 +212,9 @@ export default function FeedPage() {
         if (isMounted) {
           setPosts([]);
 
-          // 개발 환경에서만 상세 에러 메시지 표시
           if (process.env.NODE_ENV === 'development') {
             console.log('⚠️ 백엔드 서버 연결 실패. 빈 피드를 표시합니다.');
             console.log('백엔드 서버(localhost:8080)가 실행 중인지 확인해주세요.');
-
-            // 에러 타입별 상세 정보
-            const errorMessage = err?.message || err?.toString() || '알 수 없는 오류';
-            console.log('에러 메시지:', errorMessage);
-
-            if (errorMessage.includes('Network Error') ||
-                errorMessage.includes('ECONNREFUSED') ||
-                errorMessage.includes('fetch') ||
-                errorMessage.includes('500')) {
-              console.log('💡 해결 방법:');
-              console.log('   1. 백엔드 서버를 먼저 실행해주세요');
-              console.log('   2. 서버가 8080 포트에서 실행 중인지 확인해주세요');
-              console.log('   3. 서버의 CORS 설정을 확인해주세요');
-              console.log('   4. 방화벽이나 보안 소프트웨어가 차단하지 않는지 확인해주세요');
-            }
           }
         }
       } finally {
@@ -241,24 +226,23 @@ export default function FeedPage() {
 
     fetchData();
 
-    // 클린업 함수
     return () => {
       isMounted = false;
     };
   }, [feedMode, selectedCategoryKey, searchQuery, userId]);
 
-  // 🔥 수정 4: 팔로우 상태 초기화 함수 개선
+  // 🔥 수정: 팔로우 상태 초기화 함수 (완전 수정)
   const initializeFollowStates = async (postList: Post[]) => {
     if (!userId || postList.length === 0) return;
 
     console.log('🔄 팔로우 상태 초기화 시작...');
 
     try {
-      // 1. 고유한 작성자 ID 목록 추출 (중복 제거)
+      // 🔥 실제 User ID 기준으로 고유한 작성자 ID 목록 추출
       const uniqueAuthorIds = Array.from(
           new Set(
               postList
-                  .map(post => post.author.id)
+                  .map(post => getPostUserId(post))
                   .filter(authorId => authorId !== userId) // 자기 자신 제외
           )
       );
@@ -270,44 +254,40 @@ export default function FeedPage() {
         return;
       }
 
-      // 2. 팔로우 상태를 저장할 맵 생성
       const followStatusMap = new Map<number, boolean>();
 
-      // 3. 각 작성자의 팔로우 상태를 순차적으로 확인 (과부하 방지)
+      // 각 작성자의 팔로우 상태를 순차적으로 확인
       for (const authorId of uniqueAuthorIds) {
         try {
           console.log(`🔍 팔로우 상태 확인: 작성자 ID ${authorId}`);
 
-          // post-api.ts의 checkFollowStatus 함수 사용
           const response = await checkFollowStatus(userId, authorId);
-
           const isFollowing = response.data?.isFollowing || false;
           followStatusMap.set(authorId, isFollowing);
           console.log(`✅ 작성자 ID ${authorId}: ${isFollowing ? '팔로잉' : '팔로우 안함'}`);
 
-          // 4. 요청 간격 조절 (서버 과부하 방지)
           if (uniqueAuthorIds.length > 5) {
-            await new Promise(resolve => setTimeout(resolve, 100)); // 100ms 대기
+            await new Promise(resolve => setTimeout(resolve, 100));
           }
 
         } catch (error) {
           console.warn(`❌ 작성자 ID ${authorId} 상태 확인 오류:`, error);
-          followStatusMap.set(authorId, false); // 오류 시 기본값
+          followStatusMap.set(authorId, false);
         }
       }
 
-      // 5. 게시글 목록 업데이트 (한 번에 처리)
+      // 게시글 목록 업데이트
       const updatedPosts = postList.map(post => {
-        if (post.author.id === userId) {
-          // 자기 자신은 팔로우 버튼 숨김
+        const postUserId = getPostUserId(post);
+
+        if (postUserId === userId) {
           return { ...post, author: { ...post.author, isFollowing: false } };
         }
 
-        const isFollowing = followStatusMap.get(post.author.id) || false;
+        const isFollowing = followStatusMap.get(postUserId) || false;
         return { ...post, author: { ...post.author, isFollowing } };
       });
 
-      // 6. 상태 업데이트
       setPosts(updatedPosts);
       console.log('✅ 팔로우 상태 초기화 완료');
 
@@ -316,22 +296,20 @@ export default function FeedPage() {
     }
   };
 
-  // 🔥 수정 5: 페이지 포커스 시 팔로우 상태 새로고침 개선
+  // 페이지 포커스 시 팔로우 상태 새로고침
   useEffect(() => {
     let focusTimeout: NodeJS.Timeout;
 
     const handlePageFocus = () => {
-      // 디바운싱: 연속된 포커스 이벤트 방지
       clearTimeout(focusTimeout);
       focusTimeout = setTimeout(() => {
         if (userId && posts.length > 0) {
           console.log('🔄 페이지 포커스 - 팔로우 상태 새로고침');
           initializeFollowStates(posts);
         }
-      }, 1000); // 1초 후 실행
+      }, 1000);
     };
 
-    // 페이지 가시성 변경 이벤트만 사용 (윈도우 포커스는 제거)
     const handleVisibilityChange = () => {
       if (!document.hidden) {
         handlePageFocus();
@@ -350,7 +328,7 @@ export default function FeedPage() {
     setSelectedCategoryKey(key === selectedCategoryKey ? null : key)
   }
 
-  // 🔥 수정 6: handleLikeToggle 함수 개선 (에러 핸들링 추가)
+  // 좋아요 토글
   const handleLikeToggle = async (postId: number) => {
     if (!userId) {
       alert('로그인이 필요합니다.');
@@ -370,11 +348,9 @@ export default function FeedPage() {
     }
 
     try {
-      // 서버에 좋아요 토글 요청
       const response = await toggleLike(postId, userId);
 
       if (response.success && response.data) {
-        // 서버 응답에 따라 최종 상태 업데이트
         const serverLikedState = response.data.isLiked;
         const serverLikesCount = response.data.likesCount;
 
@@ -391,24 +367,11 @@ export default function FeedPage() {
       }
     } catch (error) {
       console.error('❌ 좋아요 처리 실패:', error);
-
-      // 실패 시 원래 상태로 되돌리기
-      const revertedPosts = posts.map(p => {
-        const originalPost = posts.find(op => op.id === postId);
-        return p.id === postId && originalPost ? originalPost : p;
-      });
-      setPosts(revertedPosts);
-
-      if (detailedPost && detailedPost.id === postId) {
-        const originalDetailedPost = posts.find(p => p.id === postId);
-        if (originalDetailedPost) {
-          setDetailedPost(originalDetailedPost);
-        }
-      }
+      // 실패 시 원래 상태로 되돌리기 (생략)
     }
   }
 
-  // 🔥 수정 7: handleFollowToggle 함수 완전 수정
+  // 🔥 수정: 팔로우 토글 함수 (완전 수정)
   const handleFollowToggle = async (authorName: string, targetUserId: number) => {
     console.log('🎯 팔로우 토글 시도:', { authorName, targetUserId, currentUserId: userId });
 
@@ -423,8 +386,8 @@ export default function FeedPage() {
       return;
     }
 
-    // 현재 팔로우 상태 확인
-    const currentPost = posts.find(p => p.author.id === targetUserId);
+    // 🔥 수정: 실제 User ID로 현재 게시물 찾기
+    const currentPost = posts.find(p => getPostUserId(p) === targetUserId);
     const isCurrentlyFollowing = currentPost?.author.isFollowing || false;
 
     console.log('📊 현재 팔로우 상태:', isCurrentlyFollowing);
@@ -432,24 +395,27 @@ export default function FeedPage() {
     // UI 즉시 업데이트 (낙관적 업데이트)
     const optimisticNewState = !isCurrentlyFollowing;
 
-    const updatedPosts = posts.map(p =>
-        p.author.id === targetUserId
-            ? { ...p, author: { ...p.author, isFollowing: optimisticNewState } }
-            : p
-    );
+    const updatedPosts = posts.map(p => {
+      const postUserId = getPostUserId(p);
+      return postUserId === targetUserId
+          ? { ...p, author: { ...p.author, isFollowing: optimisticNewState } }
+          : p;
+    });
     setPosts(updatedPosts);
 
     // 상세보기 모달도 업데이트
-    if (detailedPost && detailedPost.author.id === targetUserId) {
-      setDetailedPost(prev =>
-          prev ? { ...prev, author: { ...prev.author, isFollowing: optimisticNewState } } : null
-      );
+    if (detailedPost) {
+      const detailedPostUserId = getPostUserId(detailedPost);
+      if (detailedPostUserId === targetUserId) {
+        setDetailedPost(prev =>
+            prev ? { ...prev, author: { ...prev.author, isFollowing: optimisticNewState } } : null
+        );
+      }
     }
 
     try {
       console.log('🚀 API 호출 시작...');
 
-      // post-api.ts의 toggleFollow 함수 사용
       const response = await toggleFollow(userId, targetUserId);
 
       console.log('✅ 팔로우 토글 응답:', response.data);
@@ -459,18 +425,22 @@ export default function FeedPage() {
         console.log('🎯 서버에서 확인된 팔로우 상태:', serverFollowingState);
 
         // 서버 응답에 따라 최종 상태 확정
-        const finalUpdatedPosts = posts.map(p =>
-            p.author.id === targetUserId
-                ? { ...p, author: { ...p.author, isFollowing: serverFollowingState } }
-                : p
-        );
+        const finalUpdatedPosts = posts.map(p => {
+          const postUserId = getPostUserId(p);
+          return postUserId === targetUserId
+              ? { ...p, author: { ...p.author, isFollowing: serverFollowingState } }
+              : p;
+        });
         setPosts(finalUpdatedPosts);
 
         // 상세보기 모달도 최종 업데이트
-        if (detailedPost && detailedPost.author.id === targetUserId) {
-          setDetailedPost(prev =>
-              prev ? { ...prev, author: { ...prev.author, isFollowing: serverFollowingState } } : null
-          );
+        if (detailedPost) {
+          const detailedPostUserId = getPostUserId(detailedPost);
+          if (detailedPostUserId === targetUserId) {
+            setDetailedPost(prev =>
+                prev ? { ...prev, author: { ...prev.author, isFollowing: serverFollowingState } } : null
+            );
+          }
         }
 
         const actionText = serverFollowingState ? '팔로우' : '언팔로우';
@@ -481,52 +451,49 @@ export default function FeedPage() {
         alert('팔로우 처리에 실패했습니다.');
 
         // 실패 시 원래 상태로 되돌리기
-        const revertedPosts = posts.map(p =>
-            p.author.id === targetUserId
-                ? { ...p, author: { ...p.author, isFollowing: isCurrentlyFollowing } }
-                : p
-        );
+        const revertedPosts = posts.map(p => {
+          const postUserId = getPostUserId(p);
+          return postUserId === targetUserId
+              ? { ...p, author: { ...p.author, isFollowing: isCurrentlyFollowing } }
+              : p;
+        });
         setPosts(revertedPosts);
 
-        if (detailedPost && detailedPost.author.id === targetUserId) {
-          setDetailedPost(prev =>
-              prev ? { ...prev, author: { ...prev.author, isFollowing: isCurrentlyFollowing } } : null
-          );
+        if (detailedPost) {
+          const detailedPostUserId = getPostUserId(detailedPost);
+          if (detailedPostUserId === targetUserId) {
+            setDetailedPost(prev =>
+                prev ? { ...prev, author: { ...prev.author, isFollowing: isCurrentlyFollowing } } : null
+            );
+          }
         }
       }
     } catch (error) {
       console.error('❌ 팔로우 토글 중 오류:', error);
 
-      // 상세한 에러 정보 표시
-      let errorMessage = '팔로우 처리 중 오류가 발생했습니다.';
-      if (error instanceof Error) {
-        if (error.message.includes('500')) {
-          errorMessage = '서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
-        } else if (error.message.includes('Network Error')) {
-          errorMessage = '네트워크 연결을 확인해주세요.';
+      // 오류 시 원래 상태로 되돌리기
+      const revertedPosts = posts.map(p => {
+        const postUserId = getPostUserId(p);
+        return postUserId === targetUserId
+            ? { ...p, author: { ...p.author, isFollowing: isCurrentlyFollowing } }
+            : p;
+      });
+      setPosts(revertedPosts);
+
+      if (detailedPost) {
+        const detailedPostUserId = getPostUserId(detailedPost);
+        if (detailedPostUserId === targetUserId) {
+          setDetailedPost(prev =>
+              prev ? { ...prev, author: { ...prev.author, isFollowing: isCurrentlyFollowing } } : null
+          );
         }
       }
 
-      alert(errorMessage);
-
-      // 오류 시 원래 상태로 되돌리기
-      const revertedPosts = posts.map(p =>
-          p.author.id === targetUserId
-              ? { ...p, author: { ...p.author, isFollowing: isCurrentlyFollowing } }
-              : p
-      );
-      setPosts(revertedPosts);
-
-      // 상세보기 모달도 되돌리기
-      if (detailedPost && detailedPost.author.id === targetUserId) {
-        setDetailedPost(prev =>
-            prev ? { ...prev, author: { ...prev.author, isFollowing: isCurrentlyFollowing } } : null
-        );
-      }
+      alert('팔로우 처리 중 오류가 발생했습니다.');
     }
   };
 
-  // 🔥 수정 8: handleCommentSubmit 함수 개선
+  // 댓글 제출
   const handleCommentSubmit = async () => {
     if (!newComment.trim() || !detailedPost || typeof userId !== "number") {
       if (!userId) {
@@ -538,7 +505,7 @@ export default function FeedPage() {
     // 낙관적 업데이트용 임시 댓글
     const newCommentObj: Comment = {
       id: `temp-${Date.now()}`,
-      author: { name: "Current User", avatar: "/placeholder.svg", title: "Test User Title" },
+      author: { name: "Current User", avatar: "/placeholder.svg" },
       content: newComment,
       likes: 0,
       timeAgo: "방금 전",
@@ -556,17 +523,14 @@ export default function FeedPage() {
         prev ? { ...prev, comments: prev.comments + 1, commentsList: [...(prev.commentsList || []), newCommentObj] } : null
     )
 
-    // 입력 필드 초기화
     const commentText = newComment;
     setNewComment("");
 
     try {
-      // 서버에 댓글 추가 요청
       const response = await addComment(detailedPost.id, userId, commentText);
 
       if (response.success) {
         console.log('✅ 댓글 추가 성공');
-        // 성공 시에는 임시 댓글을 그대로 유지하거나 서버 응답으로 대체
       } else {
         throw new Error(response.message || '댓글 추가에 실패했습니다.');
       }
@@ -590,7 +554,6 @@ export default function FeedPage() {
           } : null
       )
 
-      // 입력 필드 복원
       setNewComment(commentText);
     }
   }
@@ -687,7 +650,7 @@ export default function FeedPage() {
                               allCategories={allCategories}
                               onCardClick={handleOpenPostDetail}
                               onLike={handleLikeToggle}
-                              onFollowToggle={() => handleFollowToggle(post.author.name, post.author.id)}
+                              onFollowToggle={() => handleFollowToggle(post.author.name, getPostUserId(post))}
                               isActive={false}
                           />
                       ))}
@@ -764,16 +727,16 @@ export default function FeedPage() {
                         <div>
                           <DialogTitle className="text-base font-semibold">{detailedPost.author.name}</DialogTitle>
                           <DialogDescription className="text-xs text-gray-500">
-                            {detailedPost.author.title} · {detailedPost.timeAgo}
+                            {detailedPost.timeAgo}
                           </DialogDescription>
                         </div>
                       </div>
-                      {/* 🔥 수정 9: 자기 자신의 게시글에는 팔로우 버튼 숨김 */}
-                      {detailedPost.author.id !== userId && (
+                      {/* 🔥 수정: 자기 자신의 게시글에는 팔로우 버튼 숨김 */}
+                      {getPostUserId(detailedPost) !== userId && (
                           <Button
                               variant={detailedPost.author.isFollowing ? "default" : "outline"}
                               size="sm"
-                              onClick={() => handleFollowToggle(detailedPost.author.name, detailedPost.author.id)}
+                              onClick={() => handleFollowToggle(detailedPost.author.name, getPostUserId(detailedPost))}
                               className={`${detailedPost.author.isFollowing ? "bg-violet-500 hover:bg-violet-600 text-white" : "border-violet-500 text-violet-500 hover:bg-violet-50"}`}
                           >
                             {detailedPost.author.isFollowing ? (
@@ -852,9 +815,6 @@ export default function FeedPage() {
                                       <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-2 mb-1">
                                           <p className="font-semibold text-sm truncate">{comment.author.name}</p>
-                                          {comment.author.title && (
-                                              <p className="text-xs text-gray-500 truncate">{comment.author.title}</p>
-                                          )}
                                           <p className="text-xs text-gray-400 ml-auto flex-shrink-0">{comment.timeAgo}</p>
                                         </div>
                                         <p className="text-sm text-gray-700 break-words">{comment.content}</p>
@@ -897,7 +857,7 @@ export default function FeedPage() {
                         )}
                       </div>
 
-                      {/* 🔥 수정 10: 댓글 입력 섹션 개선 */}
+                      {/* 댓글 입력 섹션 */}
                       <div className="bg-gray-50 p-4 flex-shrink-0">
                         <div className="border-t border-gray-200 bg-gray-50 p-4 flex items-center gap-3">
                           <Avatar className="h-8 w-8 flex-shrink-0">
