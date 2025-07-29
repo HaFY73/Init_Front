@@ -1,7 +1,7 @@
 "use client"
 
 import SideLayout from "../sidebar/SideLayout";
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { useRouter } from "next/navigation";
 import Image from "next/image"
 import { UpwardMenu } from "../components/upward-menu";
@@ -129,9 +129,27 @@ const getPostUserId = (post: Post): number => {
   return post.userId || post.author.id;
 }
 
+// Debounce 훅
+const useDebounce = (value: string, delay: number) => {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+};
+
 export default function FeedPage() {
   const [currentPostIndex] = useState(0)
-  const [searchQuery, setSearchQuery] = useState("")
+  const [searchInput, setSearchInput] = useState("")
+  const [searchQuery] = useState("")
   const [posts, setPosts] = useState<Post[]>([])
   const [detailedPost, setDetailedPost] = useState<Post | null>(null)
   const [loading, setLoading] = useState(true)
@@ -143,6 +161,9 @@ export default function FeedPage() {
   const handleOpenPostDetail = (post: Post) => setDetailedPost(post);
   const userId = getCurrentUserId();
   const router = useRouter()
+
+  // Debounce 적용
+  const debouncedSearchQuery = useDebounce(searchInput, 500);
 
   // 🔥 데이터 가져오기 useEffect
   useEffect(() => {
@@ -166,14 +187,14 @@ export default function FeedPage() {
         fetchFunction = () => getFollowingPosts(userId);
       } else if (selectedCategoryKey) {
         fetchFunction = () => getPostsByCategory(selectedCategoryKey);
-      } else if (searchQuery) {
-        fetchFunction = () => searchPosts(searchQuery);
+      } else if (debouncedSearchQuery) {
+        fetchFunction = () => searchPosts(debouncedSearchQuery);
       } else {
         fetchFunction = () => getPosts();
       }
 
       try {
-        console.log('🔍 데이터 가져오기 시작...', { feedMode, userId, selectedCategoryKey, searchQuery });
+        console.log('🔍 데이터 가져오기 시작...', { feedMode, userId, selectedCategoryKey, searchQuery: debouncedSearchQuery });
         const res = await fetchFunction();
 
         if (isMounted && res.success) {
@@ -229,7 +250,7 @@ export default function FeedPage() {
     return () => {
       isMounted = false;
     };
-  }, [feedMode, selectedCategoryKey, searchQuery, userId]);
+  }, [feedMode, selectedCategoryKey, debouncedSearchQuery, userId]);
 
   // 🔥 수정: 팔로우 상태 초기화 함수 (완전 수정)
   const initializeFollowStates = async (postList: Post[]) => {
@@ -324,9 +345,9 @@ export default function FeedPage() {
     };
   }, [userId, posts.length]);
 
-  const handleCategoryClick = (key: string) => {
+  const handleCategoryClick = useCallback((key: string) => {
     setSelectedCategoryKey(key === selectedCategoryKey ? null : key)
-  }
+  }, [selectedCategoryKey])
 
   // 좋아요 토글
   const handleLikeToggle = async (postId: number) => {
@@ -611,8 +632,8 @@ export default function FeedPage() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                   <Input
                       placeholder="검색..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
+                      value={searchInput}
+                      onChange={(e) => setSearchInput(e.target.value)}
                       className="pl-10 pr-4 py-2.5 w-full border-gray-300 focus:border-[#6366f1] focus:ring-[#8b5cf6] rounded-full text-sm"
                   />
                 </div>
@@ -671,7 +692,7 @@ export default function FeedPage() {
                               : selectedCategoryKey
                                   ? "선택한 카테고리에 게시글이 없습니다. 다른 카테고리를 확인해보세요."
                                   : searchQuery
-                                      ? `'${searchQuery}'에 대한 검색 결과가 없습니다.`
+                                      ? `'${debouncedSearchQuery}'에 대한 검색 결과가 없습니다.`
                                       : "아직 게시글이 없습니다. 첫 번째 게시글을 작성해보세요!"
                       }
                     </p>
